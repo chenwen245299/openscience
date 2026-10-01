@@ -717,7 +717,7 @@ async function bootstrap(splash) {
         "Automatic installation requires the signed and notarized OpenScience release. Download the verified installer, or continue without installing this copy.",
     })
     if (prompt.response === 0) {
-      await shell.openExternal("https://github.com/synthetic-sciences/openscience/releases/latest")
+      await shell.openExternal("https://github.com/chenwen245299/openscience/releases/latest")
     }
     return false
   }

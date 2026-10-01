@@ -4,12 +4,11 @@ import { healthyRuntime, pinnedVersion } from "../../../../frontend/desktop/src/
 const packaged = { packaged: true, sidecar: false, supervised: false, version: "2.0.127" }
 const source = { healthy: true, version: "0.0.0-main-202609210915", runId: "run_fixture" }
 
-test("a packaged shell accepts only the runtime version it shipped with", () => {
+test("an ordinary packaged shell accepts any live runtime, including a from-source build stamp", () => {
   const version = pinnedVersion(packaged)
-  expect(version).toBe("2.0.127")
+  expect(version).toBeUndefined()
+  expect(healthyRuntime(source, version)).toBe(true)
   expect(healthyRuntime({ ...source, version: "2.0.127" }, version)).toBe(true)
-  expect(healthyRuntime({ ...source, version: "2.0.126" }, version)).toBe(false)
-  expect(healthyRuntime(source, version)).toBe(false)
 })
 
 test("a shell run from source accepts the build stamp of a from-source sidecar", () => {

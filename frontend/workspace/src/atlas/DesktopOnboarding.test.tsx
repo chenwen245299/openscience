@@ -236,14 +236,24 @@ function setInput(host: HTMLElement, value: string) {
   input.dispatchEvent(new Event("input", { bubbles: true }))
 }
 
-test("a fresh desktop starts at the account step with no way to skip it", async () => {
+test("the account step can be skipped, and a skipped setup finishes as not signed in", async () => {
   const app = fixture()
   const view = app.mount()
   await until(() => heading(view.host) === "Welcome to OpenScience")
   expect(button(view.host, "Continue with Synthetic Sciences").disabled).toBe(false)
-  expect(Array.from(view.host.querySelectorAll("button")).some((el) => /skip/i.test(el.textContent ?? ""))).toBe(false)
   expect(view.host.textContent).not.toContain("Research workspace loaded")
   expect(view.host.textContent).toContain("1 / 4")
+  // Skipping the account jumps past Ace, which needs an account, to the models step.
+  button(view.host, "Skip for now").click()
+  await until(() => heading(view.host) === "Connect your models")
+  // Back from a skipped setup returns to the account, not the Ace step it never saw.
+  button(view.host, "Back").click()
+  await until(() => heading(view.host) === "Welcome to OpenScience")
+  button(view.host, "Skip for now").click()
+  await until(() => heading(view.host) === "Connect your models")
+  button(view.host, "Continue").click()
+  await until(() => heading(view.host) === "You're set")
+  expect(view.host.textContent).toContain("Not signed in")
 })
 
 test("the desktop shows the loader with its caption until the setup state arrives", async () => {

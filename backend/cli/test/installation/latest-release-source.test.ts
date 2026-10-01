@@ -25,7 +25,7 @@ describe("Installation.latest", () => {
     const asked = stub({ tag_name: "v9.8.7" })
 
     expect(await Installation.latest("desktop")).toBe("9.8.7")
-    expect(asked).toEqual(["https://api.github.com/repos/synthetic-sciences/OpenScience/releases/latest"])
+    expect(asked).toEqual(["https://api.github.com/repos/chenwen245299/openscience/releases/latest"])
   })
 
   test("resolves a package-manager copy from its npm channel tag", async () => {

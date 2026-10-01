@@ -130,7 +130,7 @@ describe("launch update notice", () => {
     )
     installer?.click()
 
-    expect(opened).toEqual(["https://github.com/synthetic-sciences/OpenScience/releases"])
+    expect(opened).toEqual(["https://github.com/chenwen245299/openscience/releases"])
   })
 })
 
@@ -181,6 +181,6 @@ describe("Customize → General update row", () => {
     )
     installer?.click()
 
-    expect(opened).toEqual(["https://github.com/synthetic-sciences/OpenScience/releases"])
+    expect(opened).toEqual(["https://github.com/chenwen245299/openscience/releases"])
   })
 })

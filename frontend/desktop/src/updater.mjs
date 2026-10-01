@@ -25,7 +25,7 @@ import { blockmapLimit, cacheArchive, downloadChanges } from "./update-download.
 const execute = promisify(execFile)
 const exec = (file, args, options = {}) =>
   execute(file, args, { timeout: 10 * 60_000, maxBuffer: 1024 * 1024, ...options })
-const api = "https://api.github.com/repos/synthetic-sciences/openscience"
+const api = "https://api.github.com/repos/chenwen245299/openscience"
 const id = "ai.syntheticsciences.openscience"
 const MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024
 // How long the detached helper may take to verify the handoff and write its

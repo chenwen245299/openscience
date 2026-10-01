@@ -507,7 +507,13 @@ export function DesktopOnboardingController(
     </Show>
   )
   const back = (): OnboardingStep | undefined =>
-    step() === "connect" ? "ace" : step() === "done" ? "connect" : undefined
+    step() === "connect"
+      ? account.connected
+        ? "ace"
+        : "account"
+      : step() === "done"
+        ? "connect"
+        : undefined
 
   return (
     <Show when={ready()} fallback={<DesktopOnboardingLoading />}>
@@ -563,6 +569,14 @@ export function DesktopOnboardingController(
                             onClick={() => setAccount("keyEntry", true)}
                           >
                             Use a sign-in key
+                          </button>
+                          <button
+                            type="button"
+                            class="desktop-onboarding__link"
+                            disabled={account.pending}
+                            onClick={() => remember("connect")}
+                          >
+                            Skip for now
                           </button>
                         </>
                       }
@@ -781,7 +795,7 @@ export function DesktopOnboardingController(
                   <dl class="desktop-onboarding__summary">
                     <div>
                       <dt>Account</dt>
-                      <dd>Signed in</dd>
+                      <dd>{account.connected ? "Signed in" : "Not signed in"}</dd>
                     </div>
                     <div>
                       <dt>Ace</dt>

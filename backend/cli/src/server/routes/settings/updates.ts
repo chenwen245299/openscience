@@ -11,8 +11,8 @@ import { UpdateQuiescence } from "../../../process/update-quiescence"
 import { timingSafeEqual } from "../../../util/timing-safe"
 import { GracefulShutdown } from "../../../process/graceful-shutdown"
 
-const RELEASES = "https://github.com/synthetic-sciences/openscience/releases"
-const RELEASES_API = "https://api.github.com/repos/synthetic-sciences/openscience/releases?per_page=20"
+const RELEASES = "https://github.com/chenwen245299/openscience/releases"
+const RELEASES_API = "https://api.github.com/repos/chenwen245299/openscience/releases?per_page=20"
 const CACHE_TTL = 5 * 60_000
 
 export function isNewerVersion(current: string, latest: string) {

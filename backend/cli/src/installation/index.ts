@@ -353,7 +353,7 @@ export namespace Installation {
    *  released there and nowhere else, so this — not the npm dist-tag the
    *  package managers resolve — is the version a desktop copy upgrades to. */
   function githubLatest() {
-    return releaseFetch("https://api.github.com/repos/synthetic-sciences/OpenScience/releases/latest")
+    return releaseFetch("https://api.github.com/repos/chenwen245299/openscience/releases/latest")
       .then((res) => {
         if (!res.ok) throw new Error(res.statusText)
         return res.json()

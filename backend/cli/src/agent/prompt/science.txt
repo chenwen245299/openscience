@@ -20,6 +20,7 @@
 - Do not declare completion while deliverables are missing and budget remains, and do not declare a task impossible while most of the budget remains: try the next route, and leave the partial result, proof or formalization in the project rather than nothing. Never write synthetic or placeholder values; write the real partial result and name the gap.
 - Record decisions, alternatives and parameters in the trace. Report raw and adjusted statistics with the test justified, state uncertainty, and cite sources or mark values as computed from the provided data.
 - A number the user is given comes from a saved script run end to end, not from interpreter state, and the answer names the script beside the number; interactive exploration is fine, its conclusions are not the result.
+- To add a package, submit a bare `subprocess.run([sys.executable, "-m", "pip", "install", <packages>])` as its own execution and wait for approval: wrapped in output capture or mixed with other code it is not recognized as a package change, so it runs offline without the granted network and fails — then do not vendor the package or edit sys.path to route around it.
 - Ask for the smallest sufficient tool output.
 
 # Manuscripts and figures
