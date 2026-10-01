@@ -62,6 +62,11 @@ export namespace Session {
     return `${title} (fork #1)`
   }
 
+  /** The agent loop that runs a session's turns: the built-in research loop,
+   * or the Mol loop in `src/mol/loop.ts` that MolSessions develop against. */
+  export const Loop = z.enum(["research", "mol"]).meta({ ref: "SessionLoop" })
+  export type Loop = z.infer<typeof Loop>
+
   export const Info = z
     .object({
       id: Identifier.schema("session"),
@@ -72,6 +77,7 @@ export namespace Session {
         "Default tool directory: owned scratch or the existing project directory.",
       ),
       parentID: Identifier.schema("session").optional(),
+      loop: Loop.optional().describe("The agent loop that runs this session's turns. Omitted means research."),
       summary: z
         .object({
           additions: z.number(),
@@ -239,6 +245,7 @@ export namespace Session {
         workingRoot: SessionFilesystem.WorkingRoot.optional().describe(
           "Pin relative tool paths to a connected read/write folder, or to scratch. Omit for automatic.",
         ),
+        loop: Loop.optional().describe("The agent loop for this session's turns. Omit for research."),
       })
       .optional(),
     async (input) => {
@@ -250,6 +257,7 @@ export namespace Session {
         permission: input?.permission,
         workspace: input?.workspace,
         workingRoot: input?.workingRoot,
+        loop: input?.loop,
       })
     },
   )
@@ -263,9 +271,11 @@ export namespace Session {
       const original = await get(input.sessionID)
       if (!original) throw new Error("session not found")
       const title = getForkedTitle(original.title)
+      // A fork continues the same conversation, so it keeps that conversation's loop.
       const session = await createNext({
         directory: Instance.directory,
         title,
+        loop: original.loop,
       })
       const msgs = await messages({ sessionID: input.sessionID })
       const idMap = new Map<string, string>()
@@ -374,6 +384,7 @@ export namespace Session {
     permission?: PermissionNext.Ruleset
     workspace?: Workspace
     workingRoot?: SessionFilesystem.WorkingRoot
+    loop?: Loop
   }) {
     const id = Identifier.descending("session", input.id)
     const directory = Project.canonicalize(input.directory)
@@ -415,6 +426,8 @@ export namespace Session {
       directory,
       workspace: input.workspace ?? "isolated",
       parentID: input.parentID,
+      // Research stays the unrecorded default, so its sessions are unchanged.
+      ...(input.loop && input.loop !== "research" ? { loop: input.loop } : {}),
       title: input.title ?? createDefaultTitle(!!input.parentID),
       permission: input.permission,
       time: {

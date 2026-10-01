@@ -27650,6 +27650,9 @@
                         "minLength": 1
                       }
                     ]
+                  },
+                  "loop": {
+                    "$ref": "#/components/schemas/SessionLoop"
                   }
                 }
               }
@@ -59987,6 +59990,14 @@
           "properties"
         ]
       },
+      "SessionLoop": {
+        "description": "The agent loop that runs this session's turns. Omitted means research.",
+        "type": "string",
+        "enum": [
+          "research",
+          "mol"
+        ]
+      },
       "PermissionAction": {
         "type": "string",
         "enum": [
@@ -60047,6 +60058,9 @@
           "parentID": {
             "type": "string",
             "pattern": "^ses.*"
+          },
+          "loop": {
+            "$ref": "#/components/schemas/SessionLoop"
           },
           "summary": {
             "type": "object",

@@ -262,6 +262,8 @@ export namespace Server {
         // markers, swaps the stable root, then releases waiting requests onto
         // the new destination. Keep the switch endpoint itself outside its own
         // barrier and avoid pinning long-lived streams/websocket upgrades.
+        // Health reads only process state; held behind a running switch, every
+        // client's liveness probe timed out and reported the server as down.
         .use(async (c, next) => {
           const switching = c.req.path === "/settings/storage/location"
           const streaming =
@@ -269,7 +271,8 @@ export namespace Server {
             c.req.path === "/log" ||
             c.req.path === "/runtime/events" ||
             c.req.header("upgrade") === "websocket"
-          if (switching || streaming) return next()
+          const health = c.req.path === "/global/health"
+          if (switching || streaming || health) return next()
           await DataRootBarrier.during(Global.Path.data, next, 120_000)
         })
         .route("/global", GlobalRoutes())

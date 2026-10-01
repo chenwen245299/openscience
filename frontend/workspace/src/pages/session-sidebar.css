@@ -253,6 +253,58 @@
   scrollbar-gutter: stable;
 }
 
+/* Sessions and MolSessions scroll together, so a short group does not reserve
+   half of the rail. */
+.session-sidebar__groups {
+  min-height: 72px;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.session-sidebar__groups .session-sidebar__list {
+  min-height: 0;
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.session-sidebar__group-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding-right: var(--sidebar-space-2);
+}
+
+.session-sidebar__group-new {
+  all: unset;
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  margin-top: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--atlas-radius-xs);
+  color: var(--color-text-faint);
+  cursor: pointer;
+  transition:
+    background-color 140ms var(--agent-ease),
+    color 140ms var(--agent-ease);
+}
+
+.session-sidebar__group-new:hover {
+  background: var(--color-active);
+  color: var(--color-text);
+}
+
+.session-sidebar__group-new:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 .session-sidebar__empty {
   padding: 8px;
   color: var(--color-text-faint);
@@ -503,6 +555,7 @@
     .session-sidebar__action-copy,
   .session-sidebar[data-collapsed="true"] .session-sidebar__action-copy,
   .session-sidebar[data-collapsed="true"] .session-sidebar__group-label,
+  .session-sidebar[data-collapsed="true"] .session-sidebar__group-header,
   .session-sidebar[data-collapsed="true"] .session-sidebar__label,
   .session-sidebar[data-collapsed="true"] .session-sidebar__session-title,
   .session-sidebar[data-collapsed="true"] .session-sidebar__empty {

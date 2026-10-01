@@ -74,6 +74,7 @@ import { SessionCheckpoint } from "./checkpoint"
 import { ToolVisibility } from "@/tool/visibility"
 import { Experiments } from "@/experiments"
 import { HarnessState } from "@/harness/state"
+import { MolLoop } from "@/mol/loop"
 import { Toolset } from "./toolset"
 import { SessionTraceStore } from "./trace-store"
 import { SessionLoopState } from "./loop-state"
@@ -203,7 +204,9 @@ export namespace SessionPrompt {
     return processActive.size
   }
 
-  const state = Instance.state(
+  // Exported for the MolSessions copy of `execute`, which settles the same
+  // queued callbacks when its turn ends.
+  export const state = Instance.state(
     () => {
       const data: Record<
         string,
@@ -2113,6 +2116,9 @@ export namespace SessionPrompt {
     return await lease.during(async () => {
       abort.throwIfAborted()
       try {
+        // A MolSessions turn runs on the copy of this loop in src/mol/loop.ts,
+        // under this same admission, cancellation and lease.
+        if (session.loop === "mol") return await MolLoop.execute(sessionID, session, abort)
         return await execute(sessionID, session, abort)
       } finally {
         // Streaming deltas are intentionally coalesced in-process. Do not

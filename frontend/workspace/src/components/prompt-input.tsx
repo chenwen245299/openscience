@@ -131,6 +131,8 @@ interface PromptInputProps {
   ref?: (el: HTMLDivElement) => void
   newSessionWorktree?: string
   onNewSessionWorktreeReset?: () => void
+  /** The loop a session created from this draft runs on; MolSessions pass "mol". */
+  newSessionLoop?: "mol"
   onSubmit?: () => void
 }
 
@@ -2123,8 +2125,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           : Identifier.descending("session")
       setStore({ bootstrapID: candidate, bootstrapDirectory: sessionDirectory })
       const workingRoot = pendingWorkingRoot()
+      const loop = props.newSessionLoop
       session = await client.session
-        .create({ id: candidate, ...(workingRoot ? { workingRoot } : {}) })
+        .create({ id: candidate, ...(workingRoot ? { workingRoot } : {}), ...(loop ? { loop } : {}) })
         .then((x) => x.data ?? undefined)
         .catch(async (err) => {
           const recovery = await client.session

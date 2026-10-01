@@ -123,6 +123,9 @@ export interface KernelStartOptions {
    * Package mutations may contact package repositories even when ordinary
    * analysis runtimes inherit a deny-by-default project policy. */
   sandboxNetwork?: "allow" | "deny"
+  /** Fold what child processes write to the interpreter's own descriptors into
+   * each result. Set for a package change, whose installer is a child process. */
+  captureProcessOutput?: boolean
   /** Internal immutable sandbox snapshot authorized for this exact spawn.
    * Registry-owned: callers cannot override the final authority decision. */
   sandboxPolicy?: KernelSandboxPolicy

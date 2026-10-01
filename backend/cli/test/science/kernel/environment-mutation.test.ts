@@ -150,6 +150,50 @@ test("recognizes pip flags without backtracking on adversarial separators", () =
   ).toBeUndefined()
 })
 
+test("grants network only to an execution that is nothing but a literal install command", () => {
+  const plan = (code: string, language: "python" | "r" = "python") =>
+    KernelEnvironmentMutation.detect({ language, environment: language, code })
+  const pip = (...args: string[]) =>
+    `import subprocess, sys\nsubprocess.run([sys.executable, "-m", "pip", ${args.map((arg) => JSON.stringify(arg)).join(", ")}], check=True)`
+
+  expect(plan(pip("install", "rdkit"))).toMatchObject({ network: true, packages: ["rdkit"] })
+  expect(
+    plan(
+      `import subprocess\nimport sys\n\nsubprocess.check_call(\n    [sys.executable, "-m", "pip", "--quiet", "install", "numpy>=2", "pandas"],  # pinned\n)`,
+    ),
+  ).toMatchObject({ network: true, packages: ["numpy>=2", "pandas"] })
+  expect(plan(`install.packages(c("ggplot2", "dplyr"), repos = "https://cloud.r-project.org")`, "r")).toMatchObject({
+    network: true,
+    packages: ["ggplot2", "dplyr"],
+  })
+
+  // The card names packages, not code: anything riding along runs offline.
+  expect(
+    plan(`${pip("install", "rdkit")}\nimport urllib.request\nurllib.request.urlopen("https://example.com")`),
+  ).toMatchObject({ network: false })
+  expect(
+    plan(`import subprocess, sys\nname = "rdkit"\nsubprocess.run([sys.executable, "-m", "pip", "install", name])`),
+  ).toMatchObject({
+    network: false,
+  })
+  expect(plan(`import os\nos.system("pip install rdkit")`)).toMatchObject({ network: false })
+  expect(plan(`install.packages("x")\nsystem("curl https://example.com")`, "r")).toMatchObject({ network: false })
+  // Nor does an install aimed at another interpreter or outside the managed root.
+  for (const relocated of [
+    ["--user"],
+    ["--targ=/usr/local/lib"],
+    ["-Ut", "/usr/local/lib"],
+    ["--break-system-packages"],
+  ]) {
+    expect(plan(pip("install", ...relocated, "rdkit"))).toMatchObject({ network: false })
+  }
+  expect(plan(`install.packages("x", lib = "/usr/lib/R/library")`, "r")).toMatchObject({ network: false })
+  expect(
+    KernelEnvironmentMutation.permission(plan(`${pip("install", "rdkit")}\nprint(1)`)!).metadata.environment_mutation
+      .warning,
+  ).toContain("without network access")
+})
+
 test("prefers an installed scientific stack over a newer sparse Python", () => {
   expect(
     rankPython([
@@ -346,13 +390,16 @@ test("an approved Python environment change restarts only the affected warm proc
               operation: "package_install",
               manager: "pip",
               restart: true,
-              warning: expect.stringContaining("package repositories"),
+              // The change carries other code, so it runs without network.
+              warning: expect.stringContaining("without network access"),
             },
           },
         })
         expect(approvals[2]).toMatchObject({ permission: "bash", patterns: ["python"] })
         expect(changed.metadata.restarted).toBe(true)
         expect(changed.output).toContain("Python restarted with cleared in-memory state")
+        // ...and the result says how to get network.
+        expect(changed.output).toContain("ran without network access")
         expect(after.incarnation).toBeGreaterThan(before.incarnation ?? 0)
         expect(after.process_id).not.toBe(before.process_id)
         expect(state.output.trim()).toBe("False")

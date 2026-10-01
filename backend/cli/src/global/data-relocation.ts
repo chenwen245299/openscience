@@ -312,12 +312,52 @@ export namespace DataRelocation {
     }
   }
 
+  // Where a symlink points, whether or not anything is there. Conda's package
+  // cache keeps links such as libcblas.3.dylib -> libopenblas.0.dylib whose
+  // target ships in a different package, so a dangling link is ordinary data
+  // and realpath would fail the whole move with ENOENT.
+  async function linkage(from: string): Promise<{ resolved: string; dangling: boolean }> {
+    const resolved = await fs.realpath(from).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined
+      throw error
+    })
+    if (resolved) return { resolved, dangling: false }
+    return { resolved: path.resolve(path.dirname(from), await fs.readlink(from)), dangling: true }
+  }
+
+  // A data root is tens of thousands of small files (one managed Conda
+  // environment alone is ~50k) and copies on APFS or btrfs are clones, so a
+  // move is bound by per-file latency, not bandwidth. Done one file at a time
+  // it kept every request paused behind the barrier for most of a minute.
+  const parallelism = 32
+
+  /** Run tasks with bounded concurrency. After the first failure no new task
+   * starts, and the error surfaces only once in-flight tasks settle, so a
+   * caller that then removes the staging directory never races a running copy. */
+  async function bounded(tasks: Array<() => Promise<void>>) {
+    let next = 0
+    let failure: { error: unknown } | undefined
+    const worker = async () => {
+      while (!failure && next < tasks.length) {
+        const task = tasks[next++]!
+        await task().catch((error: unknown) => {
+          failure ??= { error }
+        })
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(parallelism, tasks.length) }, worker))
+    if (failure) throw failure.error
+  }
+
   async function snapshot(source: string, destination: string): Promise<{ files: number; bytes: number }> {
     const records: Array<{ source: string; destination: string; bytes: number; sha256: string }> = []
     const directories = new Set<string>()
+    const copies: Array<() => Promise<void>> = []
     const stack: Array<{ source: string; destination: string; relative: string }> = [
       { source, destination, relative: "" },
     ]
+    // The walk creates every directory before any copy starts, so the copies
+    // below can run in any order.
     while (stack.length) {
       const current = stack.pop()
       if (!current) continue
@@ -330,59 +370,70 @@ export namespace DataRelocation {
         if (machineLocal.has(relative) || skipped.has(relative) || appTransient(relative, entry.name)) continue
         const from = path.join(current.source, entry.name)
         const to = path.join(current.destination, entry.name)
-        const stat = await fs.lstat(from)
         if (entry.isDirectory()) {
+          const stat = await fs.lstat(from)
           await fs.mkdir(to, { recursive: true, mode: stat.mode & 0o777 })
           stack.push({ source: from, destination: to, relative })
           continue
         }
         if (entry.isSymbolicLink()) {
-          const resolved = await fs.realpath(from)
-          if (!inside(source, resolved)) throw new Error(`Data symlink escapes the active root: ${relative}`)
-          const mapped = path.join(destination, path.relative(source, resolved))
-          const resolvedStat = await fs.stat(resolved)
-          await fs.symlink(path.relative(path.dirname(to), mapped), to, resolvedStat.isDirectory() ? "dir" : "file")
+          copies.push(async () => {
+            const link = await linkage(from)
+            if (!inside(source, link.resolved)) throw new Error(`Data symlink escapes the active root: ${relative}`)
+            const mapped = path.join(destination, path.relative(source, link.resolved))
+            const type = link.dangling ? undefined : (await fs.stat(link.resolved)).isDirectory() ? "dir" : "file"
+            await fs.symlink(path.relative(path.dirname(to), mapped), to, type)
+          })
           continue
         }
         if (!entry.isFile()) throw new Error(`Unsupported data entry during relocation: ${relative}`)
         if (relative === path.join("artifact-store", "artifacts.db")) {
-          await snapshotDatabase(from, to)
-          const copied = await fs.stat(to)
-          records.push({ source: from, destination: to, bytes: copied.size, sha256: await hash(to) })
+          copies.push(async () => {
+            await snapshotDatabase(from, to)
+            const copied = await fs.stat(to)
+            records.push({ source: from, destination: to, bytes: copied.size, sha256: await hash(to) })
+          })
           continue
         }
-        const before = { size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino, dev: stat.dev }
-        await fs.copyFile(from, to, fs.constants.COPYFILE_EXCL)
-        await fs.chmod(to, stat.mode & 0o777)
-        const [after, sourceHash, targetHash] = await Promise.all([fs.stat(from), hash(from), hash(to)])
-        if (
-          after.size !== before.size ||
-          after.mtimeMs !== before.mtimeMs ||
-          after.ino !== before.ino ||
-          after.dev !== before.dev ||
-          sourceHash !== targetHash
-        ) {
-          throw new Error(`Data changed while it was being relocated: ${relative}`)
-        }
-        records.push({ source: from, destination: to, bytes: before.size, sha256: targetHash })
+        copies.push(async () => {
+          const stat = await fs.lstat(from)
+          const before = { size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino, dev: stat.dev }
+          await fs.copyFile(from, to, fs.constants.COPYFILE_EXCL)
+          await fs.chmod(to, stat.mode & 0o777)
+          // The copy is checked against this source digest when every file is
+          // re-read below; hashing the target here as well read it twice.
+          const [after, sha256] = await Promise.all([fs.stat(from), hash(from)])
+          if (
+            after.size !== before.size ||
+            after.mtimeMs !== before.mtimeMs ||
+            after.ino !== before.ino ||
+            after.dev !== before.dev
+          ) {
+            throw new Error(`Data changed while it was being relocated: ${relative}`)
+          }
+          records.push({ source: from, destination: to, bytes: before.size, sha256 })
+        })
       }
     }
+    await bounded(copies)
 
-    for (const record of records) {
-      const stat = await fs.lstat(record.destination)
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== record.bytes) {
-        throw new Error(`Relocated file failed structural verification: ${record.destination}`)
-      }
-      if ((await hash(record.destination)) !== record.sha256) {
-        throw new Error(`Relocated file failed checksum verification: ${record.destination}`)
-      }
-      const handle = await fs.open(record.destination, "r")
-      try {
-        await handle.sync()
-      } finally {
-        await handle.close()
-      }
-    }
+    await bounded(
+      records.map((record) => async () => {
+        const stat = await fs.lstat(record.destination)
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== record.bytes) {
+          throw new Error(`Relocated file failed structural verification: ${record.destination}`)
+        }
+        if ((await hash(record.destination)) !== record.sha256) {
+          throw new Error(`Relocated file failed checksum verification: ${record.destination}`)
+        }
+        const handle = await fs.open(record.destination, "r")
+        try {
+          await handle.sync()
+        } finally {
+          await handle.close()
+        }
+      }),
+    )
     await verifyArtifacts(destination)
     for (const directory of [...directories].sort((a, b) => b.length - a.length)) await syncDirectory(directory)
     return { files: records.length, bytes: records.reduce((sum, record) => sum + record.bytes, 0) }
@@ -391,6 +442,7 @@ export namespace DataRelocation {
   async function estimate(source: string): Promise<{ files: number; bytes: number }> {
     let files = 0
     let bytes = 0
+    const checks: Array<() => Promise<void>> = []
     const stack: Array<{ directory: string; relative: string }> = [{ directory: source, relative: "" }]
     while (stack.length) {
       const current = stack.pop()
@@ -405,19 +457,24 @@ export namespace DataRelocation {
           continue
         }
         if (entry.isSymbolicLink()) {
-          const resolved = await fs.realpath(filepath)
-          if (!inside(source, resolved)) throw new Error(`Data symlink escapes the active root: ${relative}`)
+          checks.push(async () => {
+            const link = await linkage(filepath)
+            if (!inside(source, link.resolved)) throw new Error(`Data symlink escapes the active root: ${relative}`)
+          })
           continue
         }
         if (!entry.isFile()) throw new Error(`Unsupported data entry during relocation: ${relative}`)
-        const stat = await fs.lstat(filepath)
-        if (!Number.isSafeInteger(stat.size) || stat.size < 0 || !Number.isSafeInteger(bytes + stat.size)) {
-          throw new Error("The data snapshot is too large to verify safely")
-        }
-        files++
-        bytes += stat.size
+        checks.push(async () => {
+          const stat = await fs.lstat(filepath)
+          if (!Number.isSafeInteger(stat.size) || stat.size < 0 || !Number.isSafeInteger(bytes + stat.size)) {
+            throw new Error("The data snapshot is too large to verify safely")
+          }
+          files++
+          bytes += stat.size
+        })
       }
     }
+    await bounded(checks)
     return { files, bytes }
   }
 

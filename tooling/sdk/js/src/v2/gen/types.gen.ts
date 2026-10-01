@@ -1145,6 +1145,11 @@ export type EventCommandExecuted = {
   }
 }
 
+/**
+ * The agent loop that runs this session's turns. Omitted means research.
+ */
+export type SessionLoop = "research" | "mol"
+
 export type PermissionAction = "allow" | "deny" | "ask"
 
 export type PermissionRule = {
@@ -1165,6 +1170,7 @@ export type Session = {
    */
   workspace?: "isolated" | "project"
   parentID?: string
+  loop?: SessionLoop
   summary?: {
     additions: number
     deletions: number
@@ -11323,6 +11329,7 @@ export type SessionCreateData = {
      * Pin relative tool paths to a connected read/write folder, or to scratch. Omit for automatic.
      */
     workingRoot?: "scratch" | string
+    loop?: SessionLoop
   }
   path?: never
   query?: {

@@ -158,6 +158,187 @@ export namespace KernelEnvironmentMutation {
     restart: true
     /** The package names the command names, best effort, for the card. */
     packages?: string[]
+    /** Whether the change may reach package repositories: only when the code
+     * is nothing but the install command that the approval card names. */
+    network: boolean
+  }
+
+  type Literal = string | { list: Literal[] } | { word: string }
+
+  const word = /[A-Za-z_][\w.]*(?:::[A-Za-z_][\w.]*)?|\d+(?:\.\d+)?/y
+
+  /** Source as tokens when it holds only names, plain string literals and call
+   * punctuation, with statement breaks as ";". Anything else (operators,
+   * escapes, f-strings, multi-line strings) is not a plain command. */
+  function tokenize(code: string): string[] | undefined {
+    const tokens: string[] = []
+    let depth = 0
+    let index = 0
+    while (index < code.length) {
+      const char = code[index]!
+      if (char === "#") {
+        while (index < code.length && code[index] !== "\n") index++
+        continue
+      }
+      if (char === "\n" || char === ";") {
+        if (!depth) tokens.push(";")
+        index++
+        continue
+      }
+      if (/\s/.test(char)) {
+        index++
+        continue
+      }
+      if (char === '"' || char === "'") {
+        const end = code.indexOf(char, index + 1)
+        if (end < 0) return
+        const body = code.slice(index + 1, end)
+        if (/[\\\n]/.test(body)) return
+        tokens.push(char + body + char)
+        index = end + 1
+        continue
+      }
+      if ("[](),=".includes(char)) {
+        depth += char === "[" || char === "(" ? 1 : char === "]" || char === ")" ? -1 : 0
+        if (depth < 0) return
+        tokens.push(char)
+        index++
+        continue
+      }
+      word.lastIndex = index
+      const match = word.exec(code)
+      if (!match) return
+      tokens.push(match[0])
+      index += match[0].length
+    }
+    return depth ? undefined : tokens
+  }
+
+  function statements(tokens: string[]) {
+    const split: string[][] = [[]]
+    for (const token of tokens) {
+      if (token === ";") split.push([])
+      else split[split.length - 1]!.push(token)
+    }
+    return split.filter((statement) => statement.length)
+  }
+
+  function literal(tokens: string[], at: number): [Literal, number] | undefined {
+    const token = tokens[at]
+    if (token === undefined) return
+    if (token.startsWith('"') || token.startsWith("'")) return [token.slice(1, -1), at + 1]
+    const vector = token === "c" && tokens[at + 1] === "("
+    if (token === "[" || vector) {
+      const close = vector ? ")" : "]"
+      const items: Literal[] = []
+      let cursor = at + (vector ? 2 : 1)
+      while (tokens[cursor] !== close) {
+        const item = literal(tokens, cursor)
+        if (!item) return
+        items.push(item[0])
+        cursor = item[1]
+        if (tokens[cursor] === ",") cursor++
+        else if (tokens[cursor] !== close) return
+      }
+      return [{ list: items }, cursor + 1]
+    }
+    if (/^(?:True|False|None|TRUE|FALSE|NULL|\d+(?:\.\d+)?|sys\.executable)$/.test(token)) {
+      return [{ word: token }, at + 1]
+    }
+  }
+
+  /** One statement as a call whose arguments are all literals. */
+  function call(statement: string[]) {
+    const assigned = statement[1] === "=" && /^[A-Za-z_]\w*$/.test(statement[0] ?? "")
+    const callee = statement[assigned ? 2 : 0]
+    if (!callee || statement[assigned ? 3 : 1] !== "(") return
+    const positional: Literal[] = []
+    const named = new Map<string, Literal>()
+    let cursor = assigned ? 4 : 2
+    while (statement[cursor] !== ")") {
+      const key =
+        statement[cursor + 1] === "=" && /^[A-Za-z_][\w.]*$/.test(statement[cursor] ?? "")
+          ? statement[cursor]
+          : undefined
+      const value = literal(statement, key ? cursor + 2 : cursor)
+      if (!value) return
+      if (key) named.set(key, value[0])
+      else positional.push(value[0])
+      cursor = value[1]
+      if (statement[cursor] === ",") cursor++
+      else if (statement[cursor] !== ")") return
+    }
+    if (cursor !== statement.length - 1) return
+    return { callee, positional, named }
+  }
+
+  const pipCallers = new Set(["subprocess.run", "subprocess.check_call", "subprocess.call"])
+  const pipOptions = new Set(["check", "capture_output", "text", "timeout", "universal_newlines", "encoding"])
+  // Options that point an install at another interpreter or out of the managed
+  // package root, toward the user's own Python, never get network, whatever the
+  // sandbox would allow. pip accepts unambiguous prefixes of long options and
+  // clustered short ones, so those count too.
+  const relocating = ["--target", "--prefix", "--root", "--user", "--break-system-packages", "--python"]
+
+  function relocates(item: string) {
+    if (/^-[^-]/.test(item)) return item.slice(1).includes("t")
+    const name = item.split("=")[0]!
+    return name.startsWith("--") && name.length > 2 && relocating.some((option) => option.startsWith(name))
+  }
+
+  function pipCommands(parts: string[][]) {
+    const packages: string[] = []
+    let calls = 0
+    for (const statement of parts) {
+      if (statement[0] === "import") {
+        const names = statement.slice(1)
+        const valid = names.every((name, index) => (index % 2 ? name === "," : name === "subprocess" || name === "sys"))
+        if (!valid || names.length % 2 === 0) return
+        continue
+      }
+      const parsed = call(statement)
+      if (!parsed || !pipCallers.has(parsed.callee) || parsed.positional.length !== 1) return
+      if ([...parsed.named.keys()].some((key) => !pipOptions.has(key))) return
+      const argv = parsed.positional[0]
+      if (typeof argv !== "object" || !("list" in argv)) return
+      const [interpreter, flag, module, ...args] = argv.list
+      if (typeof interpreter !== "object" || !("word" in interpreter) || interpreter.word !== "sys.executable") return
+      if (flag !== "-m" || module !== "pip") return
+      if (!args.every((item): item is string => typeof item === "string")) return
+      if (args.some(relocates)) return
+      const verb = args.findIndex((item) => !item.startsWith("-"))
+      if (args[verb] !== "install" && args[verb] !== "download") return
+      packages.push(...args.slice(verb + 1).filter((item) => !item.startsWith("-")))
+      calls++
+    }
+    return calls ? packages : undefined
+  }
+
+  const rInstallers = new Set(["install.packages", "BiocManager::install", "pak::pkg_install", "renv::install"])
+
+  function rCommands(parts: string[][]) {
+    const packages: string[] = []
+    for (const statement of parts) {
+      const parsed = call(statement)
+      if (!parsed || !rInstallers.has(parsed.callee) || parsed.positional.length > 1) return
+      if (["lib", "lib.loc", "destdir"].some((key) => parsed.named.has(key))) return
+      const first = parsed.positional[0] ?? parsed.named.get("pkgs") ?? parsed.named.get("pkg")
+      const names = typeof first === "string" ? [first] : typeof first === "object" && "list" in first ? first.list : []
+      if (!names.length || !names.every((name): name is string => typeof name === "string")) return
+      packages.push(...names)
+    }
+    return packages
+  }
+
+  // An approval card names packages, not code. A change may therefore reach
+  // the network only when its execution is nothing but install commands with
+  // literal arguments; otherwise a prompt-injected model could ship other code
+  // under an install card. Returns the packages named, or undefined.
+  function command(language: Language, code: string) {
+    const tokens = tokenize(code)
+    const parts = tokens ? statements(tokens) : []
+    if (!parts.length) return
+    return language === "python" ? pipCommands(parts) : rCommands(parts)
   }
 
   function normalized(code: string) {
@@ -238,7 +419,8 @@ export namespace KernelEnvironmentMutation {
     const digest = createHash("sha256")
       .update(JSON.stringify({ language: input.language, environment: input.environment, operation, code: input.code }))
       .digest("hex")
-    const packages = named(code, operation)
+    const exact = operation === "package_install" ? command(input.language, input.code) : undefined
+    const packages = exact?.length ? exact.slice(0, 8) : named(code, operation)
     return {
       language: input.language,
       environment: input.environment,
@@ -247,6 +429,7 @@ export namespace KernelEnvironmentMutation {
       digest,
       restart: true,
       ...(packages.length ? { packages } : {}),
+      network: exact !== undefined,
     }
   }
 
@@ -291,8 +474,13 @@ export namespace KernelEnvironmentMutation {
   /** Resolve the complete Python start contract for both the canonical tool
    * and HTTP runtime surface. The starter is read-only with a project package
    * overlay; approved named task environments own their packages directly and
-   * are reusable across projects on this machine. */
-  export async function pythonRuntime(environment: string, allowMutation = false): Promise<KernelStartOptions> {
+   * are reusable across projects on this machine. A mutation reaches the
+   * network only when `network` is set, which detect() grants a bare command. */
+  export async function pythonRuntime(
+    environment: string,
+    allowMutation = false,
+    network = allowMutation,
+  ): Promise<KernelStartOptions> {
     if (environment !== "python" && allowMutation) await ManagedEnvironments.ensureTask(environment)
     // Preserve the project's conventional .venv as the explicit local
     // runtime. The app-managed starter is the clean-install fallback, not an
@@ -322,7 +510,13 @@ export namespace KernelEnvironmentMutation {
       return {
         ...managed,
         binary,
-        ...(allowMutation && prefix ? { extraWritable: [prefix], sandboxNetwork: "allow" as const } : {}),
+        ...(allowMutation && prefix
+          ? {
+              extraWritable: [prefix],
+              captureProcessOutput: true,
+              ...(network ? { sandboxNetwork: "allow" as const } : {}),
+            }
+          : {}),
       }
     }
 
@@ -341,7 +535,13 @@ export namespace KernelEnvironmentMutation {
         PIP_TARGET: packages,
         PYTHONPATH: [packages, managed.env?.PYTHONPATH, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
       },
-      ...(allowMutation ? { extraWritable: [packages], sandboxNetwork: "allow" as const } : {}),
+      ...(allowMutation
+        ? {
+            extraWritable: [packages],
+            captureProcessOutput: true,
+            ...(network ? { sandboxNetwork: "allow" as const } : {}),
+          }
+        : {}),
     }
   }
 
@@ -361,7 +561,7 @@ export namespace KernelEnvironmentMutation {
   }
 
   /** Complete R start contract shared by all canonical entry points. */
-  export async function rRuntime(allowMutation = false): Promise<KernelStartOptions> {
+  export async function rRuntime(allowMutation = false, network = allowMutation): Promise<KernelStartOptions> {
     const managed = await ManagedEnvironments.runtime("r")
     const packages = path.join(managedRoot("r", "r"), "library")
     // R warns or fails when R_LIBS_USER names a missing directory. Provision
@@ -372,7 +572,7 @@ export namespace KernelEnvironmentMutation {
       ...managed,
       environmentName: "r",
       env: { ...(managed.env ?? {}), R_LIBS_USER: packages },
-      ...(allowMutation ? { extraWritable: [packages], sandboxNetwork: "allow" as const } : {}),
+      ...(allowMutation ? { extraWritable: [packages], ...(network ? { sandboxNetwork: "allow" as const } : {}) } : {}),
     }
   }
 
@@ -390,8 +590,9 @@ export namespace KernelEnvironmentMutation {
           plan_digest: plan.digest,
           restart: plan.restart,
           ...(plan.packages?.length ? { packages: plan.packages } : {}),
-          warning:
-            "This may contact package repositories and changes packages in the selected environment. The affected runtime restarts after a successful change, so in-memory variables are cleared.",
+          warning: plan.network
+            ? "This may contact package repositories and changes packages in the selected environment. The affected runtime restarts after a successful change, so in-memory variables are cleared."
+            : "This changes packages in the selected environment without network access: package repositories are reachable only from an execution that is nothing but the install command. The affected runtime restarts after a successful change, so in-memory variables are cleared.",
         },
       },
     }

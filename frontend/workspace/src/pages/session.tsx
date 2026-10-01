@@ -40,6 +40,7 @@ import { useSettings } from "@/context/settings"
 import { confirmDialog } from "@/atlas/dialogs"
 import { DialogSettings } from "@/components/dialog-settings"
 import { SessionSidebarActions, SidebarAction, type SessionContext } from "@/pages/session-sidebar-action"
+import { SessionGroup } from "@/pages/session-sidebar-group"
 import { DisconnectedPanel } from "@/atlas/DisconnectedPanel"
 import { CommandPalette } from "@/atlas/CommandPalette"
 import { HelpOverlay } from "@/atlas/HelpOverlay"
@@ -152,6 +153,9 @@ export default function Page(): JSX.Element {
   const settings = useSettings()
   const dialog = useDialog()
   const [creating, setCreating] = createSignal(false)
+  /** The loop a draft at session/new creates its session with; MolSessions
+   * open their drafts with ?loop=mol. */
+  const draftLoop = () => (location.query.loop === "mol" ? ("mol" as const) : undefined)
   const pending: { value?: Promise<string | undefined>; context?: SessionContext } = {}
   const [mobileSessionsOpen, setMobileSessionsOpen] = createSignal(false)
   const [undoOperation, setUndoOperation] = createSignal<
@@ -209,12 +213,12 @@ export default function Page(): JSX.Element {
 
   createEffect(on(uiStore.scope, () => sanitizePublicContexts(uiStore)))
 
-  function newSession() {
-    if (params.id === "new") {
+  function newSession(loop?: "mol") {
+    if (params.id === "new" && draftLoop() === loop) {
       prompt.reset()
       return
     }
-    navigate(`/${params.dir}/session/new`)
+    navigate(`/${params.dir}/session/new${loop ? `?loop=${loop}` : ""}`)
   }
 
   async function ensureSession() {
@@ -226,8 +230,9 @@ export default function Page(): JSX.Element {
     }
     if (pending.value) return pending.value
     setCreating(true)
+    const loop = draftLoop()
     const task = sdk.client.session
-      .create()
+      .create(loop ? { loop } : undefined)
       .then((res) => {
         const data = res.data
         const id = data?.id
@@ -446,6 +451,10 @@ export default function Page(): JSX.Element {
       .filter((session) => !session.parentID && Boolean(session.time?.archived))
       .toSorted((a, b) => (b.time?.archived ?? 0) - (a.time?.archived ?? 0)),
   )
+  // The rail lists research sessions and MolSessions apart; the two differ
+  // only in the loop that runs their turns.
+  const researchSessions = createMemo(() => sessions().filter((session) => session.loop !== "mol"))
+  const molSessions = createMemo(() => sessions().filter((session) => session.loop === "mol"))
 
   createEffect(
     on(
@@ -492,7 +501,7 @@ export default function Page(): JSX.Element {
       ...tabs,
       {
         id: "new",
-        title: "New session",
+        title: draftLoop() ? "New MolSession" : "New session",
         working: false,
         dirty: prompt.dirty(),
         unread: false,
@@ -757,7 +766,14 @@ export default function Page(): JSX.Element {
         title: "New session",
         description: "Start a new research conversation",
         category: "Session",
-        onSelect: newSession,
+        onSelect: () => newSession(),
+      },
+      {
+        id: "session.new.mol",
+        title: "New MolSession",
+        description: "Start a conversation that runs on the Mol loop",
+        category: "Session",
+        onSelect: () => newSession("mol"),
       },
       {
         id: "project.files",
@@ -863,12 +879,12 @@ export default function Page(): JSX.Element {
     return list
   })
 
-  useGlobalKeys({ onNew: newSession })
+  useGlobalKeys({ onNew: () => newSession() })
 
   // The center belongs to the conversation for the lifetime of the route.
   // Files and other research surfaces mount only in the right context pane.
   const chatTitle = createMemo(() => {
-    if (!params.id || params.id === "new") return "New session"
+    if (!params.id || params.id === "new") return draftLoop() ? "New MolSession" : "New session"
     return activeSession()?.title?.trim() || "Session"
   })
   // Chat scroll: stick to the bottom while the agent streams; detach the
@@ -1091,7 +1107,8 @@ export default function Page(): JSX.Element {
         </Show>
         <SessionsSidebar
           projectName={projectName()}
-          sessions={sessions()}
+          sessions={researchSessions()}
+          molSessions={molSessions()}
           archivedSessions={archivedSessions()}
           activeId={params.id}
           dirParam={params.dir ?? ""}
@@ -1103,6 +1120,10 @@ export default function Page(): JSX.Element {
           onNew={() => {
             setMobileSessionsOpen(false)
             newSession()
+          }}
+          onNewMol={() => {
+            setMobileSessionsOpen(false)
+            newSession("mol")
           }}
           onBack={() => navigate("/")}
           onCollapse={toggleSessions}
@@ -1531,7 +1552,7 @@ export default function Page(): JSX.Element {
                       </div>
                     }
                   >
-                    <PromptInput onSubmit={followLatest} />
+                    <PromptInput onSubmit={followLatest} newSessionLoop={draftLoop()} />
                   </Show>
                 </div>
               </div>
@@ -1649,6 +1670,7 @@ function Header(props: {
 function SessionsSidebar(props: {
   projectName: string
   sessions: SyncSession[]
+  molSessions: SyncSession[]
   archivedSessions: SyncSession[]
   activeId: string | undefined
   dirParam: string
@@ -1658,6 +1680,7 @@ function SessionsSidebar(props: {
   mobileOpen: boolean
   onCloseMobile: () => void
   onNew: () => void
+  onNewMol: () => void
   onBack: () => void
   onCollapse: () => void
   onResize: (width: number, done: boolean) => void
@@ -1713,6 +1736,19 @@ function SessionsSidebar(props: {
       if (previous?.isConnected) previous.focus()
     })
   })
+
+  const row = (session: SyncSession) => (
+    <SessionRow
+      session={session}
+      active={props.activeId === session.id}
+      onSelect={() => props.onSelect(session.id)}
+      onWarm={() => props.onWarm(session.id)}
+      onDelete={() => props.onDelete(session.id)}
+      onArchive={() => props.onArchive(session.id)}
+      onRename={(title) => props.onRename(session.id, title)}
+      onPin={(pinned) => props.onPin(session.id, pinned)}
+    />
+  )
 
   return (
     <aside
@@ -1820,29 +1856,31 @@ function SessionsSidebar(props: {
         />
       </Show>
 
-      <div class="session-sidebar__label" id="session-sidebar-sessions">
-        Sessions
+      {/* MolSessions run their turns through the Mol loop (backend/cli/src/mol/loop.ts). */}
+      <div class="session-sidebar__groups">
+        <SessionGroup
+          id="session-sidebar-sessions"
+          label="Sessions"
+          create="New session"
+          empty="No sessions yet."
+          sessions={props.sessions}
+          creating={props.creating}
+          onNew={props.onNew}
+        >
+          {row}
+        </SessionGroup>
+        <SessionGroup
+          id="session-sidebar-mol-sessions"
+          label="MolSessions"
+          create="New MolSession"
+          empty="No MolSessions yet."
+          sessions={props.molSessions}
+          creating={props.creating}
+          onNew={props.onNewMol}
+        >
+          {row}
+        </SessionGroup>
       </div>
-
-      <nav class="session-sidebar__list" aria-labelledby="session-sidebar-sessions">
-        <For each={props.sessions}>
-          {(s) => (
-            <SessionRow
-              session={s}
-              active={props.activeId === s.id}
-              onSelect={() => props.onSelect(s.id)}
-              onWarm={() => props.onWarm(s.id)}
-              onDelete={() => props.onDelete(s.id)}
-              onArchive={() => props.onArchive(s.id)}
-              onRename={(title) => props.onRename(s.id, title)}
-              onPin={(pinned) => props.onPin(s.id, pinned)}
-            />
-          )}
-        </For>
-        <Show when={props.sessions.length === 0}>
-          <div class="session-sidebar__empty">No sessions yet.</div>
-        </Show>
-      </nav>
       <Show when={props.archivedSessions.length > 0}>
         <details class="session-sidebar__archived">
           <summary>

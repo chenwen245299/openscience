@@ -51,10 +51,45 @@ import { ToolRetryGuard } from "@/session/tool-retry-guard"
 // JSON-encoded (json.dumps escapes real newlines, so the end marker can never
 // appear inside a payload string).
 const KERNEL_SCRIPT = `
-import sys, json, io, base64, traceback, re, signal
+import sys, os, json, io, base64, traceback, re, signal, tempfile
 
 _real_out = sys.stdout
 _real_err = sys.stderr
+
+# A package change runs its installer as a child process, which writes to file
+# descriptors 1 and 2 rather than sys.stdout, and fd 1 is this protocol channel:
+# pip's output, errors included, reached nobody. For such a kernel, point both
+# descriptors at temporary files while code runs and fold their tails in.
+_CAPTURE_FDS = os.environ.pop("OPENSCIENCE_KERNEL_CAPTURE_FDS", "") == "1"
+_FD_TAIL = 256 * 1024
+
+def _capture_fds(saved):
+    if not _CAPTURE_FDS:
+        return
+    for fd in (1, 2):
+        try:
+            sink = tempfile.TemporaryFile()
+            saved.append((fd, os.dup(fd), sink))
+            os.dup2(sink.fileno(), fd)
+        except OSError:
+            pass
+
+def _release_fds(saved):
+    caught = {1: "", 2: ""}
+    for fd, original, sink in saved:
+        try:
+            os.dup2(original, fd)
+            os.close(original)
+            size = sink.seek(0, 2)
+            sink.seek(max(0, size - _FD_TAIL))
+            text = sink.read().decode("utf-8", "replace")
+            sink.close()
+        except OSError:
+            continue
+        if size > _FD_TAIL:
+            text = "[%d earlier bytes omitted]\\n" % (size - _FD_TAIL) + text
+        caught[fd] = text
+    return caught[1], caught[2]
 
 ns = {"__name__": "__main__", "__builtins__": __builtins__}
 
@@ -142,7 +177,9 @@ while True:
     _real_out.write("__OPENSCIENCE_EXECUTION_READY__\\n")
     _real_out.flush()
 
+    saved = []
     try:
+        _capture_fds(saved)
         _load_science(code)
         # Try eval first so a final expression can be returned without print().
         try:
@@ -180,6 +217,9 @@ while True:
             "traceback": "".join(traceback.format_exception(type(e), e, tb)).splitlines(),
         }
     finally:
+        # The code has finished: a late SIGINT must not interrupt the cleanup,
+        # or fd 1 could stay redirected and the result never reach the host.
+        _interrupting = True
         # Capture any open matplotlib figures as PNG MIME parts, then close them.
         if _plt is not None:
             try:
@@ -196,11 +236,12 @@ while True:
                 pass
         sys.stdout = _real_out
         sys.stderr = _real_err
+        child_out, child_err = _release_fds(saved)
 
     payload = {
         "ok": ok,
-        "stdout": stdout_buf.getvalue(),
-        "stderr": stderr_buf.getvalue(),
+        "stdout": stdout_buf.getvalue() + child_out,
+        "stderr": stderr_buf.getvalue() + child_err,
         "result": result_repr,
         "result_html": result_html,
         "images": images,
@@ -350,6 +391,12 @@ class PythonKernel implements Kernel {
         allowWrite: [...policy.allowWrite],
         onUnavailable: policy.onUnavailable,
       },
+      // Only an approved, bare install command starts with sandboxNetwork
+      // "allow", in a process that runs that one change and is then replaced.
+      // Both backends keep sockets closed unless the process is escalated, so
+      // the policy's network mode alone left every approved pip install
+      // offline. Escalation opens sockets only; the writable roots are unchanged.
+      escalateNetwork: opts?.sandboxNetwork === "allow",
     })
     const cwd = opts?.cwd ?? (opts?.sessionID ? await SessionFilesystem.workspace(opts.sessionID) : Instance.directory)
     this.environment = {
@@ -386,6 +433,7 @@ class PythonKernel implements Kernel {
           XDG_CACHE_HOME: path.join(cachePath, "xdg"),
           PYTHONPYCACHEPREFIX: path.join(cachePath, "pycache"),
           PYTHONUNBUFFERED: "1",
+          ...(opts?.captureProcessOutput ? { OPENSCIENCE_KERNEL_CAPTURE_FDS: "1" } : {}),
         }),
         stdio: ["pipe", "pipe", "pipe"],
         // Own process group so killing the kernel reaps its children too — a scanpy
@@ -711,8 +759,9 @@ export const pythonKernels = new PythonKernelManager()
 KernelRuntime.register(pythonKernels)
 KernelProcessIdentity.onExit(() => pythonKernels.shutdownAllSync())
 
-function clip(s: string, max = 30_000): string {
-  return s.length > max ? s.slice(0, max) + "\n\n... (truncated)" : s
+function clip(s: string, max = 30_000, tail = false): string {
+  if (s.length <= max) return s
+  return tail ? "(truncated) ...\n\n" + s.slice(-max) : s.slice(0, max) + "\n\n... (truncated)"
 }
 
 const PythonFields = {
@@ -846,7 +895,7 @@ async function executePython(params: PythonInput, ctx: Tool.Context, compatibili
     })
   }
 
-  const runtime = await KernelEnvironmentMutation.pythonRuntime(environment, !!mutation)
+  const runtime = await KernelEnvironmentMutation.pythonRuntime(environment, !!mutation, mutation?.network)
   let result: ExecuteResult
   try {
     result = await KernelRuntime.execute(
@@ -888,9 +937,19 @@ async function executePython(params: PythonInput, ctx: Tool.Context, compatibili
     parts.push(`[ERROR]\n${tb}`)
   }
   if (images.length) parts.push(`[figure] captured ${images.length} inline image(s)`)
-  if (restarted) parts.push(`[environment] ${environment} updated; Python restarted with cleared in-memory state`)
-  if (!parts.length) parts.push("(no output)")
-  const output = clip(parts.join("\n"))
+  const notes: string[] = []
+  // A run that raised nothing does not show the installer succeeded; its own
+  // output above does, so this line only reports the restart.
+  if (restarted)
+    notes.push(`[environment] The package change ran in ${environment}; Python restarted with cleared in-memory state`)
+  if (mutation && !mutation.network)
+    notes.push(
+      `[environment] This change ran without network access: only an execution that is nothing but the install command can reach package repositories. Submit it alone with literal arguments, as subprocess.run([sys.executable, "-m", "pip", "install", "<package>"], check=True) after import subprocess, sys.`,
+    )
+  if (!parts.length && !notes.length) parts.push("(no output)")
+  // An installer reports its error last, so a package change keeps the tail;
+  // the notes are added after clipping so they always survive it.
+  const output = [...(parts.length ? [clip(parts.join("\n"), 30_000, !!mutation)] : []), ...notes].join("\n")
 
   ctx.metadata({
     title,

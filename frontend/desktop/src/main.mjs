@@ -688,6 +688,10 @@ async function updates() {
 
 async function reconcileCurrentUpdate(healthyCurrent) {
   if (!app.isPackaged || process.platform !== "darwin" || !state.updateCache) return {}
+  // An ad-hoc or otherwise non-notarized build never installs updates, so it has
+  // no journals to reconcile. Without this, reconcileTransactions re-runs the
+  // Gatekeeper assessment that already failed at launch and aborts startup.
+  if (!state.updateTrusted) return {}
   const supervised = validateUpdateHealthRequest()
   return reconcileUpdateTransactions(state.updateCache, {
     current: currentUpdate(),

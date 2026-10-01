@@ -283,6 +283,9 @@ class RKernel implements Kernel {
         allowWrite: [...policy.allowWrite],
         onUnavailable: policy.onUnavailable,
       },
+      // An approved package change is the only start with sandboxNetwork
+      // "allow"; the backends open sockets only for an escalated process.
+      escalateNetwork: opts?.sandboxNetwork === "allow",
     })
     const cwd = opts?.cwd ?? (opts?.sessionID ? await SessionFilesystem.workspace(opts.sessionID) : Instance.directory)
     this.environment = {
@@ -717,7 +720,7 @@ async function executeR(params: RInput, ctx: Tool.Context, compatibilityNamed: b
         signal: ctx.abort,
         origin: { messageID: ctx.messageID, callID: ctx.callID, title, source: params.source },
       },
-      await KernelEnvironmentMutation.rRuntime(!!mutation),
+      await KernelEnvironmentMutation.rRuntime(!!mutation, mutation?.network),
     )
   } catch (error) {
     if (mutation) await KernelRuntime.release(identity).catch(() => undefined)
@@ -741,9 +744,14 @@ async function executeR(params: RInput, ctx: Tool.Context, compatibilityNamed: b
   if (result.stdout) parts.push(result.stdout)
   if (result.stderr) parts.push(`${result.ok ? "[messages]" : "[ERROR]"}\n${result.stderr}`)
   if (images.length) parts.push(`[figure] captured ${images.length} inline image(s)`)
-  if (restarted) parts.push("[environment] R packages updated; R restarted with cleared in-memory state")
-  if (!parts.length) parts.push("(no output)")
-  const output = clip(parts.join("\n"))
+  const notes: string[] = []
+  if (restarted) notes.push("[environment] The package change ran; R restarted with cleared in-memory state")
+  if (mutation && !mutation.network)
+    notes.push(
+      `[environment] This change ran without network access: only an execution that is nothing but the install call can reach package repositories. Submit it alone with literal arguments, as install.packages("<package>").`,
+    )
+  if (!parts.length && !notes.length) parts.push("(no output)")
+  const output = [...(parts.length ? [clip(parts.join("\n"))] : []), ...notes].join("\n")
 
   ctx.metadata({
     title,

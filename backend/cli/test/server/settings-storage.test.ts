@@ -14,6 +14,8 @@ const instanceModule = new URL("../../src/project/instance.ts", import.meta.url)
 const trustModule = new URL("../../src/project/trust.ts", import.meta.url).href
 const sessionModule = new URL("../../src/session/index.ts", import.meta.url).href
 const configModule = new URL("../../src/config/config.ts", import.meta.url).href
+const serverModule = new URL("../../src/server/server.ts", import.meta.url).href
+const barrierModule = new URL("../../src/global/data-root-barrier.ts", import.meta.url).href
 const roots: string[] = []
 
 afterEach(async () => {
@@ -328,6 +330,101 @@ describe("Storage Settings integration", () => {
     expect(await Bun.file(path.join(target, "artifact-store", "artifacts.db-wal")).exists()).toBe(false)
     expect(await Bun.file(path.join(target, "artifact-store", "artifacts.db-shm")).exists()).toBe(false)
     expect(await Bun.file(path.join(target, "artifact-store", "partial", "upload.partial")).exists()).toBe(false)
+  })
+
+  test("relocates dangling symlinks such as the conda package cache keeps", async () => {
+    const workspace = await root()
+    const target = path.join(workspace, "relocated")
+    const source = [
+      `import { StorageRoutes } from ${JSON.stringify(routes)}`,
+      `import { Global } from ${JSON.stringify(globalModule)}`,
+      'import fs from "node:fs/promises"',
+      'import path from "node:path"',
+      "const target = process.argv.at(-1)",
+      'const lib = path.join(Global.Path.data, "conda", "pkgs", "libcblas", "lib")',
+      "await fs.mkdir(lib, { recursive: true })",
+      'await fs.writeFile(path.join(lib, "real.dylib"), "real")',
+      'await fs.symlink("real.dylib", path.join(lib, "alias.dylib"), "file")',
+      'await fs.symlink("libopenblas.0.dylib", path.join(lib, "libcblas.3.dylib"), "file")',
+      'const response = await StorageRoutes().request("/location", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: target }) })',
+      "if (response.status !== 200) throw new Error(`relocation failed ${response.status}: ${await response.text()}`)",
+    ].join("\n")
+    await script(workspace, source, [target])
+
+    const lib = path.join(target, "conda", "pkgs", "libcblas", "lib")
+    expect(await fs.readlink(path.join(lib, "libcblas.3.dylib"))).toBe("libopenblas.0.dylib")
+    expect(await fs.readFile(path.join(lib, "alias.dylib"), "utf8")).toBe("real")
+  })
+
+  test("still refuses a dangling symlink that points outside the data root", async () => {
+    const workspace = await root()
+    const target = path.join(workspace, "relocated")
+    const source = [
+      `import { StorageRoutes } from ${JSON.stringify(routes)}`,
+      `import { Global } from ${JSON.stringify(globalModule)}`,
+      'import fs from "node:fs/promises"',
+      'import path from "node:path"',
+      "const target = process.argv.at(-1)",
+      "await fs.mkdir(Global.Path.data, { recursive: true })",
+      'await fs.symlink("../../nowhere/missing.dylib", path.join(Global.Path.data, "escape.dylib"), "file")',
+      'const response = await StorageRoutes().request("/location", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: target }) })',
+      "console.log(JSON.stringify({ status: response.status, body: await response.text() }))",
+    ].join("\n")
+    const result = JSON.parse(await script(workspace, source, [target]))
+
+    expect(result.status).toBe(409)
+    expect(result.body).toContain("escapes the active root")
+    expect(await fs.lstat(target).catch(() => undefined)).toBeUndefined()
+  })
+
+  // Root reads through mode 000, so the copy would not fail there.
+  test.skipIf(process.getuid?.() === 0)(
+    "removes the staging copy when a file fails mid-copy among many in flight",
+    async () => {
+      const workspace = await root()
+      const target = path.join(workspace, "relocated")
+      const source = [
+        `import { StorageRoutes } from ${JSON.stringify(routes)}`,
+        `import { Global } from ${JSON.stringify(globalModule)}`,
+        'import fs from "node:fs/promises"',
+        'import path from "node:path"',
+        "const target = process.argv.at(-1)",
+        'const bulk = path.join(Global.Path.data, "workspaces", "prj_bulk")',
+        "await fs.mkdir(bulk, { recursive: true })",
+        'await Promise.all(Array.from({ length: 400 }, (_, index) => fs.writeFile(path.join(bulk, `file-${index}.txt`), "x".repeat(index))))',
+        'const locked = path.join(bulk, "locked.txt")',
+        'await fs.writeFile(locked, "unreadable")',
+        "await fs.chmod(locked, 0o000)",
+        'const response = await StorageRoutes().request("/location", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: target }) })',
+        "await fs.chmod(locked, 0o600)",
+        'const journal = await Bun.file(path.join(Global.Path.config, "data-relocation.json")).exists()',
+        "console.log(JSON.stringify({ status: response.status, journal }))",
+      ].join("\n")
+      const result = JSON.parse(await script(workspace, source, [target]))
+
+      expect(result).toEqual({ status: 409, journal: false })
+      expect(await fs.lstat(target).catch(() => undefined)).toBeUndefined()
+      const leftovers = (await fs.readdir(workspace)).filter((name) => name.startsWith(".relocated.openscience-"))
+      expect(leftovers).toEqual([])
+    },
+  )
+
+  test("answers health checks while a relocation holds the data-root barrier", async () => {
+    const workspace = await root()
+    const source = [
+      `import { Server } from ${JSON.stringify(serverModule)}`,
+      `import { DataRootBarrier } from ${JSON.stringify(barrierModule)}`,
+      "const app = Server.App()",
+      "const barrier = await DataRootBarrier.exclusive(5_000)",
+      'const gated = app.fetch(new Request("http://localhost/settings/storage")).then(() => "answered")',
+      'const health = await app.fetch(new Request("http://localhost/global/health"))',
+      'const during = await Promise.race([gated, Bun.sleep(300).then(() => "waiting")])',
+      "await barrier[Symbol.asyncDispose]()",
+      "console.log(JSON.stringify({ health: health.status, during, after: await gated }))",
+    ].join("\n")
+    const result = JSON.parse(await script(workspace, source))
+
+    expect(result).toEqual({ health: 200, during: "waiting", after: "answered" })
   })
 
   test("drains a sibling writer, snapshots WAL data, and switches its precomputed paths without restart", async () => {

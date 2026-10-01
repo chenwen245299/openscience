@@ -38,6 +38,16 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ### Added
 
+- **MolSessions: sessions that run on their own agent loop.** The sidebar lists
+  MolSessions beside Sessions, and each group has a button to start a session
+  of its kind; the command palette offers New MolSession too. A MolSessions
+  turn runs on a copy of the research agent in `backend/cli/src/mol`: the turn
+  loop, the step processor, the model request and the system prompts, each
+  identical to the original when copied, so a separate agent flow can be
+  developed there without changing the research loop. Both loops share the
+  turn's admission, cancellation and lease, tools, permissions and storage. A
+  session records its loop when it is created (`loop` on `POST /session`), and a
+  fork keeps it.
 - **An NMR compound-inference skill.** `nmr-compound-inference` reads 1D ¹H or
   ¹³C spectra (Bruker, NMRPipe or two-column text) with nmrglue, plots them with a
   peak table, compares shifts against BMRB, HMDB, SDBS and nmrshiftdb2, and writes
@@ -316,6 +326,36 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **An approved package install in Python or R reaches the package index
+  again.** Since the execution sandbox started closing sockets in both network
+  modes, an approved `pip install` still ran offline, and the Python tool then
+  reported the environment as updated: pip's own output never reached the
+  model, which spent hours on workarounds such as downloading wheels by hand.
+  An approved change whose execution is nothing but the install command, with
+  literal arguments, now runs with network access. It still writes only to the
+  app-managed package directory, so the interpreter's own environment and
+  `~/.local` stay untouched. Anything that rides along in the same execution,
+  or an option that installs into another interpreter or location (`--user`,
+  `--target`, `--prefix`, `--root`, `--python`, `--break-system-packages`),
+  runs without network, and the result says how to submit the install on its
+  own. A Python package change now also returns what pip prints, its errors
+  included.
+- **Moving the data directory no longer fails on Conda's package cache.** The
+  cache keeps links such as `libcblas.3.dylib -> libopenblas.0.dylib` whose
+  target ships in another package, and the move stopped at the first one with
+  `ENOENT … lstat`. A dangling link inside the data directory now moves as it
+  is; a link that points outside the data directory is still refused.
+- **Moving the data directory is about four times faster, and the server stays
+  reachable while it runs.** The verified copy handled one file at a time and
+  read each file three times. A managed Conda environment is about 50,000
+  files, so a 790 MB move paused every request for 45 seconds, and the
+  workspace reported "Can't reach your local OpenScience server". Files are now
+  copied and verified with bounded concurrency and read twice, with the same
+  checks, and health checks are answered while writes are paused.
+- **A self-built, ad-hoc-signed macOS app starts.** Once the runtime was up,
+  startup repeated the Gatekeeper assessment that had already failed for a
+  build that is not notarized, and stopped with `spctl … rejected`. Such a
+  build never installs updates, so it now skips update-journal reconciliation.
 - **Security: a remote MCP server's refresh token and client secret are only
   ever sent to the authorization server that issued them.** Before, every token
   refresh re-read the resource's protected-resource metadata to find the

@@ -316,6 +316,7 @@ import type {
   SessionInitErrors,
   SessionInitResponses,
   SessionListResponses,
+  SessionLoop,
   SessionMessageErrors,
   SessionMessageResponses,
   SessionMessagesErrors,
@@ -3787,6 +3788,7 @@ export class Session extends HeyApiClient {
       permission?: PermissionRuleset
       workspace?: "isolated" | "project"
       workingRoot?: "scratch" | string
+      loop?: SessionLoop
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3802,6 +3804,7 @@ export class Session extends HeyApiClient {
             { in: "body", key: "permission" },
             { in: "body", key: "workspace" },
             { in: "body", key: "workingRoot" },
+            { in: "body", key: "loop" },
           ],
         },
       ],
