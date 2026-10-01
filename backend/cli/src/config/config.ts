@@ -2095,7 +2095,11 @@ export namespace Config {
         // New installations start in the low-friction contained mode. `false`
         // remains an explicit, durable Full access choice for existing users.
         enabled: policy.enabled ?? true,
-        network: policy.network ?? "deny",
+        // Default to allowing outbound network so routine research commands
+        // (pip into the isolated managed env, curl, git) work out of the box.
+        // Write-confinement (`enabled`) is unaffected: sockets open, but the
+        // writable set never widens, so the host environment stays protected.
+        network: policy.network ?? "allow",
         allowWrite: policy.allowWrite ?? [],
         onUnavailable: policy.onUnavailable ?? "error",
         requireProjectTrust: policy.requireProjectTrust ?? false,

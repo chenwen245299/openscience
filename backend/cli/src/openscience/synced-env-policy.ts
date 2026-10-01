@@ -17,6 +17,7 @@ export const BYOK_LLM_ENV_KEYS = [
   "DEEPSEEK_API_KEY",
   "CEREBRAS_API_KEY",
   "PERPLEXITY_API_KEY",
+  "MINIMAX_API_KEY",
 ]
 
 /** User-owned routing overrides paired with direct-provider credentials. */
@@ -36,6 +37,7 @@ export const BYOK_LLM_BASE_URL_KEYS = [
   "DEEPSEEK_BASE_URL",
   "CEREBRAS_BASE_URL",
   "PERPLEXITY_BASE_URL",
+  "MINIMAX_BASE_URL",
 ]
 
 /** User-owned service credentials that approved local subprocesses may receive. */

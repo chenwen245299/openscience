@@ -11,6 +11,7 @@ const popularProviders = [
   "xai",
   "deepseek",
   "moonshotai",
+  "minimax-cn",
   "zai",
   "meta",
   "openrouter",

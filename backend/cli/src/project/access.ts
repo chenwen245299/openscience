@@ -105,7 +105,7 @@ export namespace ProjectAccess {
     const sandbox = {
       ...sandboxPolicy.config,
       enabled: mode !== "full",
-      network: sandboxPolicy.config.network ?? "deny",
+      network: sandboxPolicy.config.network ?? "allow",
       allowWrite: sandboxPolicy.config.allowWrite ?? [],
       onUnavailable: sandboxPolicy.config.onUnavailable ?? "error",
       requireProjectTrust: sandboxPolicy.config.requireProjectTrust ?? false,

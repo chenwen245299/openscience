@@ -109,6 +109,7 @@ const SOURCES: Record<string, Source> = {
   azure: { kind: "provider", id: "azure" },
   nvidia: { kind: "provider", id: "nvidia" },
   minimax: { kind: "provider", id: "minimax" },
+  "minimax-cn": { kind: "provider", id: "minimax-cn" },
   modal: { kind: "vector", id: "modal" },
   tensorpool: { kind: "image", src: TENSORPOOL },
   lambda: { kind: "vector", id: "lambda" },

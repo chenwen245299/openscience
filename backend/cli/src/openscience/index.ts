@@ -217,6 +217,11 @@ const BYOK_SUBPROCESS_PROVIDERS: Record<string, { keys: string[]; baseUrl?: stri
     baseUrl: "PERPLEXITY_BASE_URL",
     publicBaseUrl: "https://api.perplexity.ai",
   },
+  "minimax-cn": {
+    keys: ["MINIMAX_API_KEY"],
+    baseUrl: "MINIMAX_BASE_URL",
+    publicBaseUrl: "https://api.minimax.cn/anthropic/v1",
+  },
 }
 
 const SESSION_PATH = path.join(Global.Path.data, "openscience-session.json")

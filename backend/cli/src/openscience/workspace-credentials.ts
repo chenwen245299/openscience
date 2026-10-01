@@ -73,6 +73,7 @@ export namespace WorkspaceCredentials {
     deepseek: ["deepseek", "DEEPSEEK_API_KEY"],
     cerebras: ["cerebras", "CEREBRAS_API_KEY"],
     perplexity: ["perplexity", "PERPLEXITY_API_KEY"],
+    "minimax-cn": ["minimax-cn", "MINIMAX_API_KEY"],
   }
 
   export function providerEnv(id: string): string[] {

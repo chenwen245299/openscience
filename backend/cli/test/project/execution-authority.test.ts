@@ -102,7 +102,7 @@ test("untrusted projects run routine terminals, shells, and kernels only in an e
         trustRevision: 2,
         sandbox: {
           enabled: true,
-          network: "deny",
+          network: "allow",
           onUnavailable: "error",
           requireProjectTrust: false,
           enforced: Sandbox.available(),
@@ -330,7 +330,7 @@ test("trusted terminal derives its process contract from the owning session", as
             sandbox: {
               enabled: true,
               enforced: true,
-              network: "deny",
+              network: "allow",
             },
           },
           status: "running",
