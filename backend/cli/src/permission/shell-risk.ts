@@ -142,8 +142,6 @@ export namespace ShellRisk {
     "psql",
     "pulumi",
     "pwsh",
-    "python",
-    "python3",
     "reboot",
     "redis-cli",
     "renice",
@@ -420,6 +418,19 @@ export namespace ShellRisk {
     return risky(`git ${command} can mutate repository or remote state`)
   }
 
+  /** A Python interpreter invocation. The sandbox confines its writes to the
+   *  workspace, and any reach past that boundary raises its own approval
+   *  alongside this command: an external path through `external_directory`, a
+   *  package download or other socket through `network`. Both of those gates
+   *  are rememberable, so the boundary the user cares about is enforced once
+   *  per destination rather than as an unbypassable Ask-risky prompt on every
+   *  run. Ordinary execution — scripts, `-m` modules, `-c` snippets, and the
+   *  workspace package changes that `-m pip` makes — is therefore contained;
+   *  it mutates only what the sandbox already permits. */
+  function python(_args: string[]): Result {
+    return contained("Python execution confined to the workspace")
+  }
+
   function find(args: string[]): Result {
     if (
       args.some((arg) =>
@@ -514,6 +525,7 @@ export namespace ShellRisk {
     if (command === "find") return find(args)
     if (["bun", "npm", "pnpm", "yarn"].includes(command)) return packageManager(command, args)
     if (["pytest", "vitest", "jest"].includes(command)) return contained(`local ${command} test`)
+    if (["python", "python3"].includes(command)) return python(args)
     if (["biome", "eslint", "prettier", "tsc"].includes(command)) return checker(command, args)
     if (
       [

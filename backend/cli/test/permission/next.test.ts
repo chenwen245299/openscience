@@ -1158,6 +1158,14 @@ test("shell risk classifier keeps audited reads, tests, and builds contained", (
     "ninja",
     "meson test -C build",
     "pytest -q",
+    // Python runs are confined to the workspace by the sandbox; external paths
+    // and package downloads raise their own rememberable approvals, so ordinary
+    // execution is not an every-run Ask-risky prompt.
+    "python train.py",
+    "python3 analyze.py",
+    "python -m pytest",
+    "python -c 'print(1)'",
+    "python -m pip install numpy",
     "cd backend && rg --files | head -n 5",
     "find backend -type f -name '*.ts'",
     "sed -n '1,20p' package.json",
@@ -1220,7 +1228,6 @@ test("shell risk classifier fails closed for destructive, remote, dynamic, and a
     "meson install -C build",
     "npm install package",
     "bun run deploy",
-    'python -c \'open("result.txt", "w").write("x")\'',
   ]
   for (const command of commands) {
     expect(ShellRisk.classify(command), command).toMatchObject({ level: "risky" })
