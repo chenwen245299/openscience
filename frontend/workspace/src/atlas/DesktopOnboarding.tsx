@@ -507,13 +507,7 @@ export function DesktopOnboardingController(
     </Show>
   )
   const back = (): OnboardingStep | undefined =>
-    step() === "connect"
-      ? account.connected
-        ? "ace"
-        : "account"
-      : step() === "done"
-        ? "connect"
-        : undefined
+    step() === "connect" ? (account.connected ? "ace" : "account") : step() === "done" ? "connect" : undefined
 
   return (
     <Show when={ready()} fallback={<DesktopOnboardingLoading />}>
