@@ -2955,7 +2955,7 @@ export class Access extends HeyApiClient {
     parameters: {
       projectID: string
       directory?: string
-      mode: "ask" | "approve" | "full"
+      mode: "ask" | "approve" | "auto" | "full"
       root?: string
     },
     options?: Options<never, ThrowOnError>,

@@ -14,16 +14,17 @@ describe("research access modes", () => {
   })
 
   test("reports the confirmed mode instead of the stale previous label", () => {
-    expect(DEFAULT_RESEARCH_ACCESS_MODE).toBe("approve")
+    expect(DEFAULT_RESEARCH_ACCESS_MODE).toBe("auto")
+    expect(researchAccessLabel("auto")).toBe("Agent decides")
     expect(researchAccessLabel("ask")).toBe("Ask always")
     expect(researchAccessLabel("approve")).toBe("Ask risky")
     expect(researchAccessLabel("full")).toBe("Full access")
     expect(researchAccessLabel("unexpected")).toBe("Restricted access")
   })
 
-  test("a fresh project defaults to Approve", () => {
-    expect(DEFAULT_RESEARCH_ACCESS_MODE).toBe("approve")
-    expect(researchAccessMode({ mode: DEFAULT_RESEARCH_ACCESS_MODE })).toBe("approve")
+  test("a fresh project defaults to Agent decides", () => {
+    expect(DEFAULT_RESEARCH_ACCESS_MODE).toBe("auto")
+    expect(researchAccessMode({ mode: DEFAULT_RESEARCH_ACCESS_MODE })).toBe("auto")
   })
 
   test("maps each label to the requested sandbox and approval contract", () => {
@@ -41,6 +42,11 @@ describe("research access modes", () => {
       sandbox: "danger-full-access",
       approval: "provider boundaries",
       boundary: "routine prompts off",
+    })
+    expect(researchAccessContract("auto")).toEqual({
+      sandbox: "workspace-write",
+      approval: "model-reviewed actions",
+      boundary: "high-risk actions ask",
     })
   })
 })

@@ -43,6 +43,15 @@ MODES = {
 }
 
 
+# A stage only writes its artifact when it finishes, so a reader watching the
+# output directory sees nothing at all while the slowest stage is running.
+# `progress.json` is written on every transition instead, and a pointer at a
+# fixed path lets a reader find the run without being told the output
+# directory. Sub-step detail already lands in `provenance.jsonl` as each
+# source or scaffold is queried; nothing here duplicates it.
+PROGRESS = "progress.json"
+
+
 class Stage:
     """One pipeline stage: a script, its arguments, and the artifact it must produce."""
 
@@ -55,16 +64,31 @@ class Stage:
         self.needs_rdkit = needs_rdkit
         self.status = "pending"
         self.elapsed = 0.0
+        self.started: str | None = None
 
-    def run(self, output_dir: str) -> bool:
+    def state(self) -> dict:
+        return {
+            "key": self.key,
+            "title": self.title,
+            "status": self.status,
+            "seconds": round(self.elapsed, 1),
+            "started": self.started,
+            "produces": ARTIFACTS[self.produces],
+        }
+
+    def run(self, output_dir: str, report) -> bool:
         if self.needs_rdkit and not have_rdkit():
             print(f"  SKIPPED: {self.title} needs RDKit, which is not importable.")
-            print("  Re-run through uv:  uv run --python 3.12 --with rdkit --no-project python scripts/pipeline.py ...")
+            print("  Provision it through the scientific capability tool, or run the pipeline under uv.")
             self.status = "skipped_no_rdkit"
+            report()
             return False
 
         command = [sys.executable, os.path.join(HERE, self.script), *self.args]
         print(f"\n=== {self.title} ===")
+        self.started = utcnow()
+        self.status = "running"
+        report()
         start = time.time()
         # Output streams straight through: these stages are slow and the agent
         # should see a source failing as it happens, not in a post-mortem.
@@ -74,17 +98,48 @@ class Stage:
         if result.returncode != 0:
             print(f"  FAILED after {self.elapsed:.1f}s (exit {result.returncode})")
             self.status = "failed"
+            report()
             return False
 
         target = artifact_path(output_dir, self.produces)
         if not os.path.isfile(target):
             print(f"  FAILED: {self.title} exited cleanly but did not write {ARTIFACTS[self.produces]}")
             self.status = "no_artifact"
+            report()
             return False
 
         self.status = "ok"
         print(f"  done in {self.elapsed:.1f}s -> {ARTIFACTS[self.produces]}")
+        report()
         return True
+
+
+def publish(output_dir: str, question: str, mode: str, stages: list[Stage], outcome: str) -> None:
+    """
+    Write the live progress file for this run.
+
+    It sits in the output directory beside the artifacts rather than at a
+    fixed hidden path. A reader finds it by watching the workspace, and a
+    dot-directory would have been invisible there: the file watcher ignores
+    `.openscience` wholesale because internal session state is write-heavy.
+
+    Best effort on purpose: a reader losing an update is a cosmetic problem,
+    while a failed write here must never take down a run that is otherwise
+    working.
+    """
+    payload = {
+        "question": question,
+        "mode": mode,
+        "output_dir": os.path.relpath(output_dir, os.getcwd()),
+        "outcome": outcome,
+        "updated": utcnow(),
+        "stages": [stage.state() for stage in stages],
+    }
+    try:
+        with open(os.path.join(output_dir, PROGRESS), "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
+    except OSError:
+        pass
 
 
 def build(args, output_dir: str) -> list[Stage]:
@@ -207,24 +262,29 @@ def main() -> int:
 
         print(f"Ranking: {predictor.describe()}")
 
+    report = lambda outcome="running": publish(output_dir, args.question, args.mode, stages, outcome)
+    report()
+
     started = time.time()
     for stage in stages:
-        if not stage.run(output_dir):
-            report = summarise(output_dir, stages)
-            report["outcome"] = "failed"
+        if not stage.run(output_dir, report):
+            summary = summarise(output_dir, stages)
+            summary["outcome"] = "failed"
             with open(os.path.join(output_dir, ARTIFACTS["report"]), "w", encoding="utf-8") as handle:
-                json.dump(report, handle, indent=2, ensure_ascii=False)
+                json.dump(summary, handle, indent=2, ensure_ascii=False)
+            report("failed")
             print(f"\nPipeline stopped at {stage.title}. Partial artifacts are in {output_dir}.")
             return 1
 
-    report = summarise(output_dir, stages)
-    report["outcome"] = "ok"
-    report["total_seconds"] = round(time.time() - started, 1)
+    summary = summarise(output_dir, stages)
+    summary["outcome"] = "ok"
+    summary["total_seconds"] = round(time.time() - started, 1)
     with open(os.path.join(output_dir, ARTIFACTS["report"]), "w", encoding="utf-8") as handle:
-        json.dump(report, handle, indent=2, ensure_ascii=False)
+        json.dump(summary, handle, indent=2, ensure_ascii=False)
+    report("ok")
 
     final_summary(output_dir)
-    print(f"\nTotal {report['total_seconds']}s")
+    print(f"\nTotal {summary['total_seconds']}s")
     return 0
 
 

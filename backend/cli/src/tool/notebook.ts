@@ -391,11 +391,8 @@ class PythonKernel implements Kernel {
         allowWrite: [...policy.allowWrite],
         onUnavailable: policy.onUnavailable,
       },
-      // Only an approved, bare install command starts with sandboxNetwork
-      // "allow", in a process that runs that one change and is then replaced.
-      // Both backends keep sockets closed unless the process is escalated, so
-      // the policy's network mode alone left every approved pip install
-      // offline. Escalation opens sockets only; the writable roots are unchanged.
+      // Registry-authorized Auto execution and approved bare package changes
+      // can open sockets; their filesystem roots stay confined.
       escalateNetwork: opts?.sandboxNetwork === "allow",
     })
     const cwd = opts?.cwd ?? (opts?.sessionID ? await SessionFilesystem.workspace(opts.sessionID) : Instance.directory)
@@ -890,7 +887,7 @@ async function executePython(params: PythonInput, ctx: Tool.Context, compatibili
       always: ["python*"],
       // What the approval card says is being run; the source itself is the tool row's input.
       metadata: {
-        kernel: { language: "python", title: params.title, lines: params.code!.split("\n").length },
+        kernel: { language: "python", code: params.code!, title: params.title, lines: params.code!.split("\n").length },
       },
     })
   }

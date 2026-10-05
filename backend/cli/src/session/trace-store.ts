@@ -22,6 +22,12 @@ export namespace SessionTraceStore {
       .optional(),
     reply: z.enum(["once", "session", "project", "always", "reject"]).optional(),
     repliedAt: z.number().optional(),
+    /** Who answered. Absent on records written before the judge existed, so a
+     *  missing value reads as the user rather than as an automatic allow. */
+    decidedBy: z.enum(["user", "judge"]).optional(),
+    /** The judge's one-line justification. Only set when `decidedBy` is
+     *  "judge" — a card the user answered needs no explanation recorded. */
+    reason: z.string().optional(),
   })
   export type Approval = z.infer<typeof Approval>
 
@@ -98,10 +104,46 @@ export namespace SessionTraceStore {
             ...approval,
             reply: input.reply,
             repliedAt: Date.now(),
+            decidedBy: "user",
           },
         },
       }
     })
+  }
+
+  /**
+   * A shell card the model adjudicated instead of the user, under the
+   * "Agent decides" action mode. Written as a complete asked/answered pair so
+   * the trace still shows what ran automatically and on what grounds — a card
+   * that is never raised is otherwise invisible after the fact, which is the
+   * one thing an automatic approval must not be.
+   */
+  export function approvalJudged(input: {
+    id: string
+    sessionID: string
+    permission: string
+    patterns: string[]
+    reason: string
+    tool?: { messageID: string; callID: string }
+  }) {
+    const now = Date.now()
+    return update(input.sessionID, (state) => ({
+      ...state,
+      approvals: {
+        ...state.approvals,
+        [input.id]: {
+          id: input.id,
+          permission: input.permission,
+          patterns: input.patterns,
+          requestedAt: now,
+          tool: input.tool,
+          reply: "once",
+          repliedAt: now,
+          decidedBy: "judge",
+          reason: input.reason,
+        },
+      },
+    }))
   }
 
   export function recordRetry(input: Omit<Retry, "id" | "createdAt"> & { sessionID: string }) {

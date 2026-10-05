@@ -36,17 +36,51 @@ bare cheminformatics use `rdkit` or `datamol`.
 
 ## Run it
 
-RDKit is required for steps 2 and 3. If it is not in the active interpreter,
-run everything through `uv`, which provisions it per invocation:
+Step 1 needs only the standard library. Steps 2 and 3 need RDKit, and the
+optional model in `predictor.py` needs scikit-learn.
+
+**Do not pip-install either one.** Both are already pinned in this repo's
+core science pack (`rdkit==2026.3.5`, `scikit-learn==1.9.0`, with numpy,
+scipy and matplotlib), fully hash-locked for macOS arm64 and glibc Linux.
+Provision that pack through the scientific capability tool when it is
+offered — `doctor` to see whether it is ready, then `setup` to create the
+exact pinned local environment. An ad-hoc `pip install` inside the execution
+sandbox is both slower and unpinned, and the sandbox may refuse it outright.
+
+Once the pack is ready, run the pipeline on that interpreter:
+
+```bash
+python scripts/pipeline.py --question "..." --output-dir results/
+```
+
+If the capability tool is not offered and RDKit has to be installed, the
+execution sandbox only lets an install reach a package index when the whole
+execution *is* the install, with literal arguments. Send exactly this, as an
+execution of its own, and wait for approval:
+
+```python
+import subprocess, sys; subprocess.run([sys.executable, "-m", "pip", "install", "rdkit"], check=True)
+```
+
+Anything else in the same execution, a non-literal argument, or a flag that
+relocates the install (`--target`, `--prefix`, `--root`, `--user`,
+`--python`, `--break-system-packages`, or `-t`) drops the network silently:
+pip then runs offline and fails for a reason that looks unrelated. Only
+`check`, `capture_output`, `text`, `timeout`, `universal_newlines` and
+`encoding` may be passed as keywords. Python restarts after the install.
+
+Outside the app, where no capability catalog exists, `uv` provisions RDKit
+per invocation:
 
 ```bash
 uv run --python 3.12 --with rdkit --no-project python scripts/pipeline.py \
-    --question "设计一个用于乏氧肿瘤光动力治疗的近红外二区AIE诊疗分子" \
-    --output-dir results/
+    --question "..." --output-dir results/
 ```
 
-With RDKit already available, `python scripts/pipeline.py ...` is enough.
-Step 1 alone needs only the standard library.
+Do not conclude `uv` is missing because `command -v uv` found nothing: the
+installer puts it in `~/.local/bin`, which many login shells never add to
+`PATH`. The scripts check that path, `/opt/homebrew/bin` and `/usr/local/bin`
+themselves and name what they found in the error.
 
 One question runs all four stages in roughly two minutes and writes every
 artifact. Common variations:

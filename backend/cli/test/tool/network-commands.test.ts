@@ -55,6 +55,22 @@ describe("network command detection", () => {
     expect(detected?.remotes).toEqual(["origin"])
     expect(detected?.commands).toHaveLength(3)
   })
+
+  test("public retrieval never receives publishing credentials", () => {
+    for (const command of [
+      ["curl", "https://example.org"],
+      ["python", "fetch.py"],
+      ["git", "clone", "https://github.com/a/b"],
+      ["hf", "download", "a/b"],
+    ])
+      expect(NetworkCommands.credentials([command])).toEqual([])
+    expect(
+      NetworkCommands.credentials([
+        ["git", "push"],
+        ["hf", "upload", "a/b"],
+      ]),
+    ).toEqual(["github", "huggingface"])
+  })
 })
 
 describe("approved network escalation", () => {

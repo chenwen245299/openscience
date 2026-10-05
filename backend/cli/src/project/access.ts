@@ -18,7 +18,12 @@ import { ProjectTrust } from "./trust"
  * project-owned while retaining the global/managed sandbox fields as policy.
  */
 export namespace ProjectAccess {
-  export const Mode = z.enum(["ask", "approve", "full"])
+  /**
+   * `auto` reviews executable code and network requests with the current model.
+   * Low-risk work runs inside the file sandbox; external files and spending
+   * retain their explicit approval boundaries.
+   */
+  export const Mode = z.enum(["ask", "approve", "auto", "full"])
   export type Mode = z.infer<typeof Mode>
 
   const Record = z.object({
@@ -70,7 +75,7 @@ export namespace ProjectAccess {
     ),
   }
 
-  const rank: Record<Mode, number> = { ask: 0, approve: 1, full: 2 }
+  const rank: Record<Mode, number> = { ask: 0, approve: 1, auto: 2, full: 3 }
 
   function root(project: Project.Info) {
     return Project.canonicalize(project.worktree)
@@ -98,7 +103,7 @@ export namespace ProjectAccess {
       Config.trustedSandboxPolicy(),
     ])
     const canonical = root(project)
-    const legacy = !trust.canExecuteProjectCode ? "ask" : sandboxPolicy.config.enabled === false ? "full" : "approve"
+    const legacy = !trust.canExecuteProjectCode ? "ask" : sandboxPolicy.config.enabled === false ? "full" : "auto"
     const requestedMode = saved?.root === canonical ? saved.mode : legacy
     const managed = requestedMode === "full" && sandboxPolicy.managed.enabled === true
     const mode = !trust.canExecuteProjectCode ? "ask" : managed ? "approve" : requestedMode

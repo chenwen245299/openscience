@@ -1,0 +1,187 @@
+.molpipe {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: var(--font-size-small);
+}
+
+.molpipe__empty {
+  margin: auto;
+  padding: 24px;
+  max-width: 34ch;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.molpipe__empty p {
+  margin: 0 0 8px;
+}
+
+.molpipe__hint {
+  font-size: var(--font-size-x-small);
+  line-height: 1.5;
+}
+
+.molpipe__hint code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--color-bg-subtle);
+}
+
+.molpipe__head {
+  flex: none;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+}
+
+.molpipe__question {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.4;
+  color: var(--color-text);
+}
+
+.molpipe__meta {
+  margin-top: 6px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: var(--font-size-x-small);
+  color: var(--color-text-muted);
+}
+
+.molpipe__meta [data-outcome="running"] {
+  color: var(--color-accent);
+}
+
+.molpipe__meta [data-outcome="failed"] {
+  color: var(--color-text-danger);
+}
+
+.molpipe__dir {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 16ch;
+  font-family: var(--font-mono);
+}
+
+.molpipe__stages {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0;
+  padding: 8px 0;
+  list-style: none;
+}
+
+.molpipe__stage {
+  padding: 6px 14px 8px;
+}
+
+.molpipe__stage[data-status="pending"] {
+  opacity: 0.55;
+}
+
+.molpipe__stage-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+}
+
+.molpipe__stage-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--font-weight-medium);
+}
+
+.molpipe__stage[data-status="running"] .molpipe__stage-title {
+  color: var(--color-text);
+}
+
+.molpipe__stage-time {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--font-size-x-small);
+  color: var(--color-text-muted);
+}
+
+.molpipe__note {
+  margin: 4px 0 0 18px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-bg-subtle) 80%, transparent);
+  font-size: var(--font-size-x-small);
+  line-height: 1.45;
+  color: var(--color-text-muted);
+}
+
+.molpipe__substeps {
+  margin: 4px 0 0;
+  padding: 0 0 0 18px;
+  list-style: none;
+  border-left: 1px solid color-mix(in srgb, var(--color-border) 45%, transparent);
+}
+
+.molpipe__substep {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0 2px 8px;
+  font-size: var(--font-size-x-small);
+  color: var(--color-text-muted);
+}
+
+.molpipe__substep[data-failed="true"] {
+  color: var(--color-text-danger);
+}
+
+.molpipe__substep-label {
+  flex: none;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: var(--color-text);
+}
+
+.molpipe__substep[data-failed="true"] .molpipe__substep-label {
+  color: inherit;
+}
+
+.molpipe__substep-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.molpipe__substep-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.molpipe__foot {
+  flex: none;
+  padding: 8px 14px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+  font-size: var(--font-size-x-small);
+  line-height: 1.45;
+  color: var(--color-text-muted);
+}

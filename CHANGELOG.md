@@ -8,6 +8,9 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ## Unreleased
 
+- Default new projects to Agent decides: the active model reviews commands and script sources in a separate JSON-only request outside conversation history, automatically allowing low-risk project work and public data retrieval while keeping high-risk actions under user approval. Enable reviewed sandbox networking for shell and Python/R execution without injecting publishing credentials into public downloads.
+- Let sandboxed macOS Git load Xcode's required runtime libraries without widening filesystem write access.
+
 - Make GPT-6.1 Sol available through connected ChatGPT/Codex subscriptions, with supported reasoning levels and Fast mode.
 - Keep GPT-6 Sol available through Codex subscriptions while removing it from the Ace model roster.
 

@@ -283,8 +283,8 @@ class RKernel implements Kernel {
         allowWrite: [...policy.allowWrite],
         onUnavailable: policy.onUnavailable,
       },
-      // An approved package change is the only start with sandboxNetwork
-      // "allow"; the backends open sockets only for an escalated process.
+      // Auto reviews and approved package changes can open sockets while
+      // retaining the same filesystem confinement.
       escalateNetwork: opts?.sandboxNetwork === "allow",
     })
     const cwd = opts?.cwd ?? (opts?.sessionID ? await SessionFilesystem.workspace(opts.sessionID) : Instance.directory)
@@ -705,7 +705,7 @@ async function executeR(params: RInput, ctx: Tool.Context, compatibilityNamed: b
       always: ["Rscript*"],
       // What the approval card says is being run; the source itself is the tool row's input.
       metadata: {
-        kernel: { language: "r", title: params.title, lines: params.code!.split("\n").length },
+        kernel: { language: "r", code: params.code!, title: params.title, lines: params.code!.split("\n").length },
       },
     })
   }

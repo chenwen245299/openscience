@@ -195,12 +195,45 @@ def validate_output_dir(output_dir: str) -> str:
 # RDKit guard
 # ---------------------------------------------------------------------------
 
-RDKIT_HINT = (
-    "RDKit is required for this stage but is not importable.\n"
-    "  Run the pipeline through uv, which provisions it per-invocation:\n"
-    "    uv run --python 3.12 --with rdkit --no-project python scripts/pipeline.py ...\n"
-    "  or install it into the active interpreter:  pip install rdkit"
-)
+def _uv_path() -> str | None:
+    """
+    Find uv even when it is not on PATH.
+
+    The installer puts it in ~/.local/bin, which plenty of login shells never
+    add, so `command -v uv` reports it missing on a machine that has it.
+    """
+    from shutil import which
+
+    found = which("uv")
+    if found:
+        return found
+    for candidate in ("~/.local/bin/uv", "/opt/homebrew/bin/uv", "/usr/local/bin/uv"):
+        path = os.path.expanduser(candidate)
+        if os.access(path, os.X_OK):
+            return path
+    return None
+
+
+def rdkit_hint() -> str:
+    uv = _uv_path()
+    lines = [
+        "RDKit is required for this stage but is not importable.",
+        f"  This interpreter: {sys.executable}",
+        "",
+        "  Preferred: provision the pinned core science pack through the scientific",
+        "  capability tool (doctor, then setup). It already carries rdkit and",
+        "  scikit-learn, hash-locked, so nothing is resolved at install time.",
+        "",
+        "  Otherwise, send exactly this as an execution of its own and wait for approval.",
+        "  The sandbox grants network only when the whole execution is the install, with",
+        "  literal arguments; --target/--user/--prefix and friends drop it silently:",
+        '    import subprocess, sys; subprocess.run([sys.executable, "-m", "pip", "install", "rdkit"], check=True)',
+    ]
+    if uv:
+        lines += ["", f"  Or run the pipeline through uv, which provisions it per invocation:", f"    {uv} run --python 3.12 --with rdkit --no-project python scripts/pipeline.py ..."]
+    else:
+        lines += ["", "  uv was not found on PATH or at ~/.local/bin, /opt/homebrew/bin, /usr/local/bin;", "  use the pip route above rather than installing uv for this."]
+    return "\n".join(lines)
 
 
 def require_rdkit():
@@ -212,7 +245,7 @@ def require_rdkit():
         RDLogger.DisableLog("rdApp.*")
         return Chem
     except ImportError:
-        print(RDKIT_HINT, file=sys.stderr)
+        print(rdkit_hint(), file=sys.stderr)
         sys.exit(2)
 
 

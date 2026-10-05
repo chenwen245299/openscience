@@ -9202,6 +9202,7 @@
                             "enum": [
                               "ask",
                               "approve",
+                              "auto",
                               "full"
                             ]
                           },
@@ -11848,6 +11849,7 @@
                           "enum": [
                             "ask",
                             "approve",
+                            "auto",
                             "full"
                           ]
                         },
@@ -15667,6 +15669,7 @@
                           "enum": [
                             "ask",
                             "approve",
+                            "auto",
                             "full"
                           ]
                         },
@@ -18342,6 +18345,7 @@
                           "enum": [
                             "ask",
                             "approve",
+                            "auto",
                             "full"
                           ]
                         },
@@ -21017,6 +21021,7 @@
                           "enum": [
                             "ask",
                             "approve",
+                            "auto",
                             "full"
                           ]
                         },
@@ -26067,6 +26072,7 @@
                       "enum": [
                         "ask",
                         "approve",
+                        "auto",
                         "full"
                       ]
                     },
@@ -26075,6 +26081,7 @@
                       "enum": [
                         "ask",
                         "approve",
+                        "auto",
                         "full"
                       ]
                     },
@@ -26240,6 +26247,7 @@
                       "enum": [
                         "ask",
                         "approve",
+                        "auto",
                         "full"
                       ]
                     },
@@ -26248,6 +26256,7 @@
                       "enum": [
                         "ask",
                         "approve",
+                        "auto",
                         "full"
                       ]
                     },
@@ -26377,6 +26386,7 @@
                     "enum": [
                       "ask",
                       "approve",
+                      "auto",
                       "full"
                     ]
                   },
@@ -26522,6 +26532,7 @@
                       "enum": [
                         "ask",
                         "approve",
+                        "auto",
                         "full"
                       ]
                     },
@@ -28943,6 +28954,16 @@
                           },
                           "repliedAt": {
                             "type": "number"
+                          },
+                          "decidedBy": {
+                            "type": "string",
+                            "enum": [
+                              "user",
+                              "judge"
+                            ]
+                          },
+                          "reason": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -43104,6 +43125,7 @@
                                     "enum": [
                                       "ask",
                                       "approve",
+                                      "auto",
                                       "full"
                                     ]
                                   },
@@ -43728,6 +43750,7 @@
                               "enum": [
                                 "ask",
                                 "approve",
+                                "auto",
                                 "full"
                               ]
                             },
@@ -44364,6 +44387,7 @@
                               "enum": [
                                 "ask",
                                 "approve",
+                                "auto",
                                 "full"
                               ]
                             },
@@ -45000,6 +45024,7 @@
                               "enum": [
                                 "ask",
                                 "approve",
+                                "auto",
                                 "full"
                               ]
                             },
@@ -45780,6 +45805,7 @@
                               "enum": [
                                 "ask",
                                 "approve",
+                                "auto",
                                 "full"
                               ]
                             },
@@ -46389,6 +46415,7 @@
                               "enum": [
                                 "ask",
                                 "approve",
+                                "auto",
                                 "full"
                               ]
                             },
@@ -47031,6 +47058,7 @@
                               "enum": [
                                 "ask",
                                 "approve",
+                                "auto",
                                 "full"
                               ]
                             },
@@ -47674,6 +47702,7 @@
                               "enum": [
                                 "ask",
                                 "approve",
+                                "auto",
                                 "full"
                               ]
                             },
@@ -48527,6 +48556,7 @@
                                     "enum": [
                                       "ask",
                                       "approve",
+                                      "auto",
                                       "full"
                                     ]
                                   },
@@ -49151,6 +49181,7 @@
                               "enum": [
                                 "ask",
                                 "approve",
+                                "auto",
                                 "full"
                               ]
                             },
@@ -49787,6 +49818,7 @@
                               "enum": [
                                 "ask",
                                 "approve",
+                                "auto",
                                 "full"
                               ]
                             },
@@ -50423,6 +50455,7 @@
                               "enum": [
                                 "ask",
                                 "approve",
+                                "auto",
                                 "full"
                               ]
                             },
@@ -51214,6 +51247,7 @@
                               "enum": [
                                 "ask",
                                 "approve",
+                                "auto",
                                 "full"
                               ]
                             },
@@ -51823,6 +51857,7 @@
                               "enum": [
                                 "ask",
                                 "approve",
+                                "auto",
                                 "full"
                               ]
                             },
@@ -52471,6 +52506,7 @@
                               "enum": [
                                 "ask",
                                 "approve",
+                                "auto",
                                 "full"
                               ]
                             },
@@ -53120,6 +53156,7 @@
                               "enum": [
                                 "ask",
                                 "approve",
+                                "auto",
                                 "full"
                               ]
                             },
@@ -58420,6 +58457,7 @@
                     "enum": [
                       "ask",
                       "approve",
+                      "auto",
                       "full"
                     ]
                   },
@@ -58428,6 +58466,7 @@
                     "enum": [
                       "ask",
                       "approve",
+                      "auto",
                       "full"
                     ]
                   },
@@ -60504,6 +60543,7 @@
                 "enum": [
                   "ask",
                   "approve",
+                  "auto",
                   "full"
                 ]
               },

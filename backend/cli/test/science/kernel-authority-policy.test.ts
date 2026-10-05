@@ -38,17 +38,17 @@ test("kernel spawn keeps the sandbox policy authorized before a global policy fl
         onUnavailable: "error" as const,
         requireProjectTrust: false,
       }
-      const mutableConfig = Config as { trustedSandbox: typeof Config.trustedSandbox }
-      const originalPolicyResolver = mutableConfig.trustedSandbox
+      const mutableConfig = Config as { trustedSandboxPolicy: typeof Config.trustedSandboxPolicy }
+      const originalPolicyResolver = mutableConfig.trustedSandboxPolicy
       const originalKernelGet = pythonKernels.get
       let spawnBoundaryEntered = false
       let policyReadsAfterAuthorization = 0
       let captured: KernelStartOptions["sandboxPolicy"]
 
-      mutableConfig.trustedSandbox = async () => {
-        if (!spawnBoundaryEntered) return authorizedPolicy
+      mutableConfig.trustedSandboxPolicy = async () => {
+        if (!spawnBoundaryEntered) return { config: authorizedPolicy, managed: {} }
         policyReadsAfterAuthorization++
-        return { ...authorizedPolicy, enabled: false }
+        return { config: { ...authorizedPolicy, enabled: false }, managed: {} }
       }
       pythonKernels.get = async (sessionID, options) => {
         captured = options?.sandboxPolicy
@@ -83,7 +83,7 @@ test("kernel spawn keeps the sandbox policy authorized before a global policy fl
         })
       } finally {
         pythonKernels.get = originalKernelGet
-        mutableConfig.trustedSandbox = originalPolicyResolver
+        mutableConfig.trustedSandboxPolicy = originalPolicyResolver
         await KernelRuntime.removeSession(identity.projectID, identity.sessionID)
         rmSync(outside, { force: true })
       }

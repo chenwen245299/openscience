@@ -16,6 +16,7 @@ import {
 import { uiStore, type ContextTab, type WorkTab } from "@/atlas/store/ui"
 import { ComputeSurface } from "@/atlas/ComputeSurface"
 import { AutoresearchPane } from "@/atlas/AutoresearchPane"
+import { MolPipelinePane } from "@/atlas/MolPipelinePane"
 import { ExternalFileAccess } from "@/atlas/FileExplorer"
 import { FilesPane } from "@/atlas/FilesPane"
 import { FileView } from "@/atlas/FilePreview"
@@ -41,6 +42,7 @@ import {
   IconTerminal,
   IconX,
   IconActivity,
+  IconFlask,
 } from "@/atlas/shared/Icon"
 import {
   DEFAULT_PANE_WIDTH,
@@ -64,6 +66,7 @@ const labels: Record<ContextTab, string> = {
   canvas: "Synthetic Sciences",
   kernels: "Compute",
   autoresearch: "Autoresearch",
+  molagent: "Design run",
   trace: "Trace",
 }
 
@@ -588,6 +591,9 @@ export function RightPane(
               <Match when={context() === "autoresearch"}>
                 <AutoresearchPane />
               </Match>
+              <Match when={context() === "molagent"}>
+                <MolPipelinePane session={session()} />
+              </Match>
             </Switch>
           </Suspense>
         </>
@@ -612,6 +618,7 @@ function workTabIcon(tab: WorkTab): JSX.Element {
   if (tab.context === "terminal") return <IconTerminal size={16} strokeWidth={1.5} />
   if (tab.context === "kernels") return <IconCpu size={16} strokeWidth={1.5} />
   if (tab.context === "autoresearch") return <IconActivity size={16} strokeWidth={1.5} />
+  if (tab.context === "molagent") return <IconFlask size={16} strokeWidth={1.5} />
   return <IconArtifact size={16} strokeWidth={1.5} />
 }
 

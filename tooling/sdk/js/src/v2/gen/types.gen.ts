@@ -688,8 +688,8 @@ export type EventProjectAccessChanged = {
       root: string
       revision: number
       trustRevision: number
-      mode: "ask" | "approve" | "full"
-      requestedMode: "ask" | "approve" | "full"
+      mode: "ask" | "approve" | "auto" | "full"
+      requestedMode: "ask" | "approve" | "auto" | "full"
       source: "default" | "legacy" | "persisted"
       trusted: boolean
       managed: boolean
@@ -1271,7 +1271,7 @@ export type Pty = {
     sessionID: string
     trustRevision: number
     accessRevision?: number
-    accessMode?: "ask" | "approve" | "full"
+    accessMode?: "ask" | "approve" | "auto" | "full"
     grantRevision: number
     generation: string
     directory?: string
@@ -5693,7 +5693,7 @@ export type SettingsComputeJobsListResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -6514,7 +6514,7 @@ export type SettingsComputeJobsStartResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -7545,7 +7545,7 @@ export type SettingsComputeJobsRetryResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -8320,7 +8320,7 @@ export type SettingsComputeJobsReleaseResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -9091,7 +9091,7 @@ export type SettingsComputeJobsCancelResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -10692,8 +10692,8 @@ export type ProjectAccessGetResponses = {
     root: string
     revision: number
     trustRevision: number
-    mode: "ask" | "approve" | "full"
-    requestedMode: "ask" | "approve" | "full"
+    mode: "ask" | "approve" | "auto" | "full"
+    requestedMode: "ask" | "approve" | "auto" | "full"
     source: "default" | "legacy" | "persisted"
     trusted: boolean
     managed: boolean
@@ -10716,7 +10716,7 @@ export type ProjectAccessGetResponse = ProjectAccessGetResponses[keyof ProjectAc
 
 export type ProjectAccessUpdateData = {
   body?: {
-    mode: "ask" | "approve" | "full"
+    mode: "ask" | "approve" | "auto" | "full"
     root?: string
   }
   path: {
@@ -10750,8 +10750,8 @@ export type ProjectAccessUpdateResponses = {
     root: string
     revision: number
     trustRevision: number
-    mode: "ask" | "approve" | "full"
-    requestedMode: "ask" | "approve" | "full"
+    mode: "ask" | "approve" | "auto" | "full"
+    requestedMode: "ask" | "approve" | "auto" | "full"
     source: "default" | "legacy" | "persisted"
     trusted: boolean
     managed: boolean
@@ -10832,7 +10832,7 @@ export type ProjectExecutionResponses = {
     sessionID: string
     trustRevision: number
     accessRevision?: number
-    accessMode?: "ask" | "approve" | "full"
+    accessMode?: "ask" | "approve" | "auto" | "full"
     grantRevision: number
     generation: string
     directory?: string
@@ -11785,6 +11785,8 @@ export type SessionTraceResponses = {
       }
       reply?: "once" | "session" | "project" | "always" | "reject"
       repliedAt?: number
+      decidedBy?: "user" | "judge"
+      reason?: string
     }>
     external: Array<{
       kind: "model" | "api" | "compute"
@@ -16224,7 +16226,7 @@ export type KernelsListResponses = {
         sessionID: string
         trustRevision: number
         accessRevision?: number
-        accessMode?: "ask" | "approve" | "full"
+        accessMode?: "ask" | "approve" | "auto" | "full"
         grantRevision: number
         generation: string
         directory?: string
@@ -16357,7 +16359,7 @@ export type KernelsRestartByIdResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -16489,7 +16491,7 @@ export type KernelsStopByIdResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -16621,7 +16623,7 @@ export type KernelsInterruptByIdResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -16797,7 +16799,7 @@ export type KernelsStatusResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -16929,7 +16931,7 @@ export type KernelsRestartResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -17061,7 +17063,7 @@ export type KernelsStopResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -17193,7 +17195,7 @@ export type KernelsInterruptResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -17403,7 +17405,7 @@ export type NotebookKernelsResponses = {
         sessionID: string
         trustRevision: number
         accessRevision?: number
-        accessMode?: "ask" | "approve" | "full"
+        accessMode?: "ask" | "approve" | "auto" | "full"
         grantRevision: number
         generation: string
         directory?: string
@@ -17536,7 +17538,7 @@ export type NotebookKernelRestartResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -17668,7 +17670,7 @@ export type NotebookKernelStopResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -17800,7 +17802,7 @@ export type NotebookKernelInterruptResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -17977,7 +17979,7 @@ export type NotebookStatusResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -18110,7 +18112,7 @@ export type NotebookRestartResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -18243,7 +18245,7 @@ export type NotebookStopResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string
@@ -18376,7 +18378,7 @@ export type NotebookInterruptResponses = {
       sessionID: string
       trustRevision: number
       accessRevision?: number
-      accessMode?: "ask" | "approve" | "full"
+      accessMode?: "ask" | "approve" | "auto" | "full"
       grantRevision: number
       generation: string
       directory?: string

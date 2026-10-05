@@ -22,7 +22,7 @@ export namespace AuthoritySignal {
     z.object({
       kind: z.literal("access"),
       projectID: z.string(),
-      mode: z.enum(["ask", "approve", "full"]),
+      mode: z.enum(["ask", "approve", "auto", "full"]),
       // Older durable records omit this flag. Watchers treat that as a
       // conservative narrowing, while current writers distinguish widening
       // so a Full-access change never tears down healthy work.

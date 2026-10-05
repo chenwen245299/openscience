@@ -110,4 +110,24 @@ export namespace NetworkCommands {
       commands: hits.flatMap((hit) => hit.commands),
     }
   }
+
+  /** Public downloads never inherit publishing tokens. Only explicit account
+   * operations request the corresponding host credential. */
+  export function credentials(commands: string[][]): ("github" | "huggingface")[] {
+    return [
+      ...new Set(
+        commands.flatMap((input): ("github" | "huggingface")[] => {
+          const command = stripEnv(input)
+          const name = command[0]?.split("/").pop()
+          if (name === "gh" || (name === "git" && command.includes("push"))) return ["github"]
+          if (
+            (name === "hf" || name === "huggingface-cli") &&
+            command.some((word) => word === "upload" || word === "repo")
+          )
+            return ["huggingface"]
+          return []
+        }),
+      ),
+    ]
+  }
 }

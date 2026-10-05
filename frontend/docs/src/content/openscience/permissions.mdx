@@ -11,11 +11,16 @@ OpenScience can edit files, run commands, and use connected services. Choose the
 | --- | --- |
 | Ask always | Review actions that change files, use the network, run compute, or incur provider costs. |
 | Ask risky | Let routine reversible work proceed and review external, costly, or hard-to-reverse actions. |
+| Agent decides (default) | Let the current model review commands and scripts separately, automatically allow low-risk project work and public data retrieval, and ask for high-risk actions. |
 | Full access | Run without routine prompts; paid compute asks once per time allowance. |
 
 An organization's policy may restrict the modes available. Use the more interactive option while learning a new project or reviewing unfamiliar inputs.
 
 The mode belongs to the project you set it in. Switching to a wider mode also settles prompts that are already waiting, so cards raised under **Ask risky** disappear once **Full access** covers them.
+
+New trusted projects default to **Agent decides**. Saved choices and organization restrictions remain effective. Each command or Python/R execution is reviewed using the currently selected model in an independent API request containing only the risk rules, project boundaries, current command, and corresponding script sources. Neither the conversation history nor the review response is added to that request or to the conversation's model context. The response is parsed as `{"risk":"无风险"}` (low risk) or `{"risk":"有风险"}` (high risk).
+
+Project-local reads, edits, deletions, tests, computation, and public internet retrieval are low risk. A new public host alone does not require approval. External personal files, credential access or disclosure, private network services, system changes, publishing, messages, and spending require approval. Explicit denies remain effective. If the review times out, the response is invalid, or a source cannot be safely inspected, the action asks for approval instead of running automatically.
 
 In **Ask risky**, research searches and WebFetch reads from enabled Network groups or custom allowed domains proceed without another tool approval, including in delegated workers. The literature group includes arXiv, ACL Anthology, OpenReview, and major conference archives. A new destination or redirect outside that list still asks for network approval. **Ask always** still asks, and explicit tool rules remain effective in every mode. Local and private network addresses remain blocked by the retrieval broker.
 
@@ -31,7 +36,9 @@ Paid compute is bounded by time rather than bound to one job. A Modal job card o
 
 These controls apply to commands run by the research agent. The **Terminal** tab is a user-operated local shell with your operating-system permissions and normal network access. Opening it does not change the agent's sandbox or approval settings.
 
-The sandbox denies network access to shell commands. A command that needs it, such as `git push`, `gh`, `hf upload`, a package install, or `curl`, asks once for its destination host; approving it runs that command with the network and the same file confinement. Approve for **This project** or **Allow always** to stop asking for a host you publish to regularly, and Full access approves automatically.
+In **Agent decides**, reviewed shell commands and Python/R code can use the network while retaining filesystem confinement, unless the project network policy denies it. This includes HTTP libraries inside scripts, so literature retrieval does not depend on recognizing a `curl` command. Public downloads receive no publishing tokens. The retrieval broker continues to block local and private addresses.
+
+In **Ask risky** and **Ask always**, the sandbox denies direct network access to ordinary shell commands. Recognized commands that need it, such as `git push`, `gh`, `hf upload`, a package install, or `curl`, ask for their destination host; approval runs that command with the network and the same file confinement. Approve for **This project** or **Allow always** to reuse a destination approval, and Full access approves automatically.
 
 Approved commands use the credentials this computer already holds: a GitHub login from the `gh` CLI or a saved credential, and the Hugging Face token from its CLI. **Customize → Credentials** offers a one-click import when it finds them, so nothing is pasted into a conversation. When a login is missing, the agent asks for it through a request card that opens Credentials rather than through the chat. Publishing stays with the lead conversation; delegated workers prepare and verify but never push, release, or upload.
 

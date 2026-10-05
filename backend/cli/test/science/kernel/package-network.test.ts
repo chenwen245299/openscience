@@ -10,9 +10,8 @@ import { executionSession, tmpdir } from "../../fixture/fixture"
 
 // A sandboxed policy that denies network, so only an escalated process connects.
 async function sandboxed<T>(fn: () => Promise<T>) {
-  const config = Config as { trustedSandbox: typeof Config.trustedSandbox }
-  const original = config.trustedSandbox
-  config.trustedSandbox = async () => ({
+  const previous = await Config.trustedSandbox()
+  await Config.setSandbox({
     enabled: true,
     network: "deny",
     allowWrite: [],
@@ -22,7 +21,7 @@ async function sandboxed<T>(fn: () => Promise<T>) {
   try {
     return await fn()
   } finally {
-    config.trustedSandbox = original
+    await Config.setSandbox(previous)
   }
 }
 

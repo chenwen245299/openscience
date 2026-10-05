@@ -1,10 +1,10 @@
-export type ResearchAccessMode = "ask" | "approve" | "full"
+export type ResearchAccessMode = "ask" | "approve" | "auto" | "full"
 
 export type ResearchAccessState = {
   mode: ResearchAccessMode
 }
 
-export const DEFAULT_RESEARCH_ACCESS_MODE: ResearchAccessMode = "approve"
+export const DEFAULT_RESEARCH_ACCESS_MODE: ResearchAccessMode = "auto"
 
 export const RESEARCH_ACCESS_OPTIONS = [
   {
@@ -17,6 +17,12 @@ export const RESEARCH_ACCESS_OPTIONS = [
     label: "Ask risky",
     description:
       "Read approved public sources and run reversible work; ask before new network hosts, spending, or risky actions",
+  },
+  {
+    value: "auto",
+    label: "Agent decides",
+    description:
+      "The current model reviews commands and scripts separately; low-risk project work and public data retrieval run automatically, high-risk actions ask",
   },
   {
     value: "full",
@@ -42,6 +48,12 @@ export function researchAccessContract(mode: ResearchAccessMode) {
     return { sandbox: "workspace-write", approval: "every action", boundary: "standing grants ignored" } as const
   if (mode === "approve")
     return { sandbox: "workspace-write", approval: "risky actions", boundary: "contained work proceeds" } as const
+  if (mode === "auto")
+    return {
+      sandbox: "workspace-write",
+      approval: "model-reviewed actions",
+      boundary: "high-risk actions ask",
+    } as const
   return {
     sandbox: "danger-full-access",
     approval: "provider boundaries",

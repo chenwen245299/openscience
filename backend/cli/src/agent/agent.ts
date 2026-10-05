@@ -92,7 +92,7 @@ export namespace Agent {
           }
         : "allow",
     })
-    // The three user-facing action modes share the same persisted trust and
+    // The user-facing action modes share the same persisted trust and
     // sandbox state that execution enforces. Built-in read-only denies remain
     // stricter, while their convenience allows below are mode-aware so Ask
     // cannot be bypassed; explicit advanced user policy still wins.
@@ -116,7 +116,8 @@ export namespace Agent {
             webfetch: "ask",
             websearch: "ask",
           }
-        : accessMode === "approve"
+        : // Auto reviews executable sources and network requests separately.
+          accessMode === "approve" || accessMode === "auto"
           ? {
               atlas: "ask",
               bash: "allow",

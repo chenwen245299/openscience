@@ -1,9 +1,10 @@
 import { Show, type JSX } from "solid-js"
-import { IconCpu, IconFolder, IconTerminal, IconActivity } from "@/atlas/shared/Icon"
+import { IconCpu, IconFolder, IconTerminal, IconActivity, IconFlask } from "@/atlas/shared/Icon"
 import { preloadTerminal } from "@/components/terminal"
 import "./session-sidebar.css"
 
-export type SessionContext = "files" | "terminal" | "canvas" | "kernels" | "autoresearch" | "trace" | "artifact"
+export type SessionContext =
+  "files" | "terminal" | "canvas" | "kernels" | "autoresearch" | "molagent" | "trace" | "artifact"
 
 export function CompactContextActions(props: {
   context: SessionContext
@@ -49,6 +50,15 @@ export function CompactContextActions(props: {
       >
         <IconActivity size={16} strokeWidth={1.5} />
         Autoresearch
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        aria-pressed={props.context === "molagent" && props.contextOpen}
+        onClick={() => props.onContext("molagent")}
+      >
+        <IconFlask size={16} strokeWidth={1.5} />
+        Design run
       </button>
     </div>
   )
@@ -141,6 +151,15 @@ export function SessionSidebarActions(props: {
           onClick={(_event?: Event) => props.onContext("autoresearch")}
         >
           <IconActivity size={16} strokeWidth={1.5} />
+        </SidebarAction>
+        <SidebarAction
+          label="Design run"
+          detail="Molecular pipeline progress"
+          ariaLabel="Open molecular design run"
+          active={props.context === "molagent" && props.contextOpen}
+          onClick={(_event?: Event) => props.onContext("molagent")}
+        >
+          <IconFlask size={16} strokeWidth={1.5} />
         </SidebarAction>
       </div>
     </div>

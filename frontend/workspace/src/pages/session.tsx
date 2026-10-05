@@ -574,13 +574,45 @@ export default function Page(): JSX.Element {
   onMount(() => {
     const onOpenContext = (event: Event) => {
       const context = (event as CustomEvent).detail?.context
-      if (!(["files", "terminal", "kernels", "autoresearch", "trace"] as SessionContext[]).includes(context)) return
+      if (
+        !(["files", "terminal", "kernels", "autoresearch", "molagent", "trace"] as SessionContext[]).includes(context)
+      )
+        return
       openContext(context)
     }
     document.addEventListener("openscience:open-context", onOpenContext)
     onCleanup(() => {
       document.removeEventListener("openscience:open-context", onOpenContext)
     })
+  })
+
+  /**
+   * Reveal a molecular design run as it starts.
+   *
+   * The pipeline writes `progress.json` on every stage transition, so its
+   * first write is the earliest honest signal that a run exists — earlier
+   * than any artifact, and the run can take minutes to produce one. Opening
+   * the panel then is the difference between watching the pipeline and
+   * wondering whether it is stuck.
+   *
+   * Requesting the session's filesystem snapshot is what registers its
+   * workspace as a native watch root, so without it no such event is ever
+   * delivered. The panel is opened once per run directory: a user who closes
+   * it has answered the question, and the same run must not keep reopening.
+   */
+  createEffect(() => {
+    const id = params.id
+    if (!id || id === "new") return
+    void sdk.request(`/session/${encodeURIComponent(id)}/filesystem`).catch(() => undefined)
+    const seen = new Set<string>()
+    const unsubscribe = sdk.event.on("file.watcher.updated", (event) => {
+      const file = event.properties.file
+      if (!/[\\/]progress\.json$/.test(file)) return
+      if (seen.has(file)) return
+      seen.add(file)
+      openContext("molagent")
+    })
+    onCleanup(unsubscribe)
   })
   const turnMessages = createMemo(() => {
     const revertID = revertInfo()?.messageID

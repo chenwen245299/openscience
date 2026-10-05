@@ -1561,3 +1561,47 @@ describe("ShellRisk long option abbreviation", () => {
     expect(ShellRisk.classify("find . -type f -del")).toMatchObject({ level: "contained" })
   })
 })
+
+describe("kernel execution risk", () => {
+  // `python script.py` through bash was contained and therefore automatic in
+  // approve mode, while the same code through the Python kernel carried
+  // `kernel` metadata instead of `shell.command`, fell through to `unknown`,
+  // and prompted on every run. Both are confined to the workspace by the same
+  // sandbox, so both must classify the same way.
+  test("the Python kernel classifies as its interpreter, not as unknown", () => {
+    expect(PermissionNext.risk("bash", { kernel: { language: "python", lines: 3 } })).toBe("contained")
+    expect(PermissionNext.risk("bash", { shell: { command: "python script.py" } })).toBe("contained")
+  })
+
+  test("approve mode stops prompting for ordinary Python execution", () => {
+    const decision = (metadata: Record<string, unknown>) =>
+      PermissionNext.modeAction({
+        mode: "approve",
+        permission: "bash",
+        configured: "allow",
+        granted: "allow",
+        metadata,
+      })
+    expect(decision({ kernel: { language: "python", lines: 3 } })).toBe("allow")
+    expect(decision({ shell: { command: "python script.py" } })).toBe("allow")
+  })
+
+  test("ask mode still prompts, and R stays risky", () => {
+    expect(
+      PermissionNext.modeAction({
+        mode: "ask",
+        permission: "bash",
+        configured: "allow",
+        granted: "allow",
+        metadata: { kernel: { language: "python" } },
+      }),
+    ).toBe("ask")
+    // Rscript is not on the contained allowlist, so the R kernel keeps its card.
+    expect(PermissionNext.risk("bash", { kernel: { language: "r" } })).toBe("risky")
+  })
+
+  test("an unmapped language and absent metadata remain fail-closed", () => {
+    expect(PermissionNext.risk("bash", { kernel: { language: "julia" } })).toBe("unknown")
+    expect(PermissionNext.risk("bash", {})).toBe("unknown")
+  })
+})

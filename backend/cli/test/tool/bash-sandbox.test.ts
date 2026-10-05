@@ -8,6 +8,10 @@ import { executionSession, sandboxedExecution, tmpdir } from "../fixture/fixture
 import { Sandbox } from "../../src/sandbox/sandbox"
 import { SessionFilesystem } from "../../src/session/filesystem"
 import { Snapshot } from "../../src/snapshot"
+import { Config } from "../../src/config/config"
+import { ProjectAccess } from "../../src/project/access"
+import { PythonTool } from "../../src/tool/notebook"
+import { KernelRuntime } from "../../src/science/kernel/registry"
 
 async function context() {
   const session = await executionSession()
@@ -29,6 +33,38 @@ async function context() {
 // only from trusted (global + managed) config — never project config — so we
 // enable it via the test-isolated managed config dir, not a project file.
 describe("tool.bash sandbox integration", () => {
+  test("auto enables HTTP inside Python scripts and kernels while preserving file confinement", async () => {
+    if (!Sandbox.available() || !Bun.which("python3")) return
+    await using _sandbox = await sandboxedExecution()
+    await Config.setSandbox({ enabled: true, network: "allow", onUnavailable: "error" })
+    await using tmp = await tmpdir({ git: true })
+    using server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("retrieval-ok") })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const ctx = await context()
+        const workspace = await SessionFilesystem.workspace(ctx.sessionID)
+        const bash = await BashTool.init()
+        const code = `import urllib.request\nprint(urllib.request.urlopen('${server.url}', timeout=2).read().decode())`
+        await Bun.write(path.join(workspace, "fetch.py"), code)
+        const result = await bash.execute({ command: "python fetch.py", description: "fetch public data" }, ctx)
+        expect(result.metadata.exit, result.output).toBe(0)
+        expect(result.output).toContain("retrieval-ok")
+        const kernel = await (await PythonTool.init()).execute({ code, title: "retrieve data", timeout: 10_000 }, ctx)
+        expect(kernel.output).toContain("retrieval-ok")
+        await KernelRuntime.removeSession(Instance.project.id, ctx.sessionID)
+        const status = await ProjectAccess.status(Instance.project)
+        await ProjectAccess.update(Instance.project, { mode: "approve", root: status.root })
+        const offline = await bash.execute(
+          { command: "python fetch.py", description: "verify direct sockets stay denied" },
+          ctx,
+        )
+        expect(offline.metadata.exit).not.toBe(0)
+        expect(offline.output).not.toContain("retrieval-ok")
+      },
+    })
+  }, 30_000)
+
   test("confines the bash tool's writes to the workspace", async () => {
     if (!Sandbox.available()) return // no OS backend on this platform — nothing to enforce
 

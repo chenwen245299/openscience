@@ -233,22 +233,44 @@ export namespace Sandbox {
     for (const temporary of [...temporaryRoots]) cleanup({ temporary })
   })
 
+  const developerGit = lazy(() => {
+    if (process.platform !== "darwin") return undefined
+    const result = spawnSync("/usr/bin/xcrun", ["--find", "git"], { encoding: "utf8", timeout: 5000 })
+    const binary = result.stdout?.trim()
+    return result.status === 0 && binary && path.isAbsolute(binary) && binary !== "/usr/bin/git" ? binary : undefined
+  })
+
   function runtimePath(temporary: string, runtime?: { python?: string; path?: string }) {
-    if (!runtime?.python) return runtime?.path
+    const search = runtime?.path ?? process.env.PATH
+    const git =
+      process.platform === "darwin" && Bun.which("git", { PATH: search }) === "/usr/bin/git"
+        ? developerGit()
+        : undefined
+    if (!runtime?.python && !git) return runtime?.path
     // Windows Python installations carry DLLs beside python.exe and cannot
     // rely on privileged symlink creation. Keep their selected directory first.
-    if (process.platform === "win32") {
-      return [path.dirname(runtime.python), runtime.path ?? process.env.PATH].filter(Boolean).join(path.delimiter)
+    if (process.platform === "win32" && runtime?.python) {
+      return [path.dirname(runtime.python), search].filter(Boolean).join(path.delimiter)
     }
     const bin = path.join(temporary, "runtime", "bin")
     fs.mkdirSync(bin, { recursive: true })
     // A symlink placed outside a venv loses its pyvenv.cfg lookup and starts
     // the base interpreter instead. exec preserves the selected binary path.
-    const wrapper = `#!/bin/sh\nexec '${runtime.python.replaceAll("'", "'\\''")}' "$@"\n`
-    for (const name of ["python", "python3"]) {
+    for (const [name, binary] of [
+      ...(runtime?.python
+        ? [
+            ["python", runtime.python],
+            ["python3", runtime.python],
+          ]
+        : []),
+      ...(git ? [["git", git]] : []),
+    ]) {
+      // Resolve Apple's Git shim before confinement: xcrun writes a host cache
+      // regardless of TMPDIR, which a workspace sandbox correctly denies.
+      const wrapper = `#!/bin/sh\nexec '${binary.replaceAll("'", "'\\''")}' "$@"\n`
       fs.writeFileSync(path.join(bin, name), wrapper, { flag: "wx", mode: 0o700 })
     }
-    return [bin, runtime.path ?? process.env.PATH].filter(Boolean).join(path.delimiter)
+    return [bin, search].filter(Boolean).join(path.delimiter)
   }
 
   function withTempEnvironment(argv: string[], temporary: string, runtimePath?: string) {
@@ -449,6 +471,10 @@ export namespace Sandbox {
       "/opt/homebrew",
       "/usr/local",
       "/Library/Developer/CommandLineTools",
+      // Apple's /usr/bin/git delegates to Xcode's selected toolchain, which
+      // needs its own dynamic libraries even when Git itself is on PATH.
+      "/Applications/Xcode.app/Contents/Developer",
+      "/Applications/Xcode.app/Contents/SharedFrameworks",
       "/Library/Frameworks",
       "/private/etc/ssl",
       path.join(os.homedir(), ".local", "share", "uv", "python"),
@@ -468,6 +494,13 @@ export namespace Sandbox {
         // A missing/broken entrypoint is not made readable. Spawn will fail
         // normally rather than widening the policy around an ambiguous path.
       }
+    }
+    const git = developerGit()
+    if (git) {
+      add(path.dirname(git))
+      // Limit the grant to this toolchain installation, not its parent apps.
+      const marker = git.indexOf("/Contents/Developer/")
+      if (marker >= 0) add(git.slice(0, marker) + "/Contents/Developer")
     }
     return [...roots]
   }
@@ -598,8 +631,8 @@ export namespace Sandbox {
     // addresses or CIDR ranges. An allow-with-private-denies profile would
     // therefore expose LAN, link-local, and cloud-metadata endpoints. Keep the
     // default deny in force for every socket operation in both policy modes.
-    // The one exception is a command the user approved for network access
-    // (a push, a fetch, an upload): it runs with sockets but the same files.
+    // Explicit user approval or an independent Auto review can grant this
+    // execution sockets while preserving its filesystem policy.
     if (policy.escalatedNetwork) lines.push("(allow network*)", "(allow system-socket)")
     const readable = withPrivateAliases(dedupe(policy.readable ?? []))
     if (readable.length) {

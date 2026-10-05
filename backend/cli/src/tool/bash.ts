@@ -33,6 +33,7 @@ import { CommandRuntime } from "@/science/command/registry"
 import { AuthoritySignal } from "@/project/authority-signal"
 import { KernelEnvironmentMutation } from "@/science/kernel/environment-mutation"
 import { FileOutputReceipts } from "@/file/output-receipts"
+import { PermissionJudge } from "@/permission/judge"
 
 const MAX_METADATA_LENGTH = 30_000
 /** How often the live output card is refreshed while a command runs. */
@@ -340,6 +341,11 @@ export const BashTool = Tool.define("bash", async () => {
         }
       }
       if (network && networkHosts.size === 0) networkHosts.add("remote")
+      // Python and other arbitrary scripts can open sockets without a curl/git
+      // command. Auto reviews their source before enabling sockets, while the
+      // sandbox continues to enforce the same filesystem roots.
+      const reviewedNetwork = authority.accessMode === "auto" && authority.sandbox.network === "allow"
+      const shellMetadata = { command: params.command, cwd, files: PermissionJudge.files(parsed) }
 
       for (const [directory, access] of directories) {
         const granted =
@@ -401,20 +407,18 @@ export const BashTool = Tool.define("bash", async () => {
         patterns: patterns.size > 0 ? Array.from(patterns) : [params.command],
         always: Array.from(always),
         metadata: {
-          shell: {
-            command: params.command,
-          },
+          shell: shellMetadata,
         },
       })
-      if (network && authority.sandbox.enforced) {
-        const hosts = Array.from(networkHosts)
+      if ((network || reviewedNetwork) && authority.sandbox.enforced) {
+        const hosts = networkHosts.size ? Array.from(networkHosts) : ["public internet"]
         await ctx.ask({
           permission: "network",
           patterns: hosts,
           always: hosts,
           metadata: {
-            network: { host: hosts[0], hosts, commands: network.commands },
-            shell: { command: params.command },
+            network: { host: hosts[0], hosts, commands: network?.commands ?? [] },
+            shell: shellMetadata,
           },
         })
       }
@@ -549,12 +553,16 @@ export const BashTool = Tool.define("bash", async () => {
             path: runtime.env?.PATH,
           },
           options: current.sandbox,
-          escalateNetwork: !!network,
+          escalateNetwork: !!network || (current.accessMode === "auto" && current.sandbox.network === "allow"),
         })
         // Publishing credentials travel only with an approved network command,
         // added after the generic sanitizer so nothing else can smuggle them.
-        const credentialEnv = network
-          ? await HostCredentials.publishEnv(sandbox.temporary, await HostCredentials.discover()).catch(() => ({}))
+        const services = NetworkCommands.credentials(parsed)
+        const credentialEnv = services.length
+          ? await HostCredentials.publishEnv(
+              sandbox.temporary,
+              (await HostCredentials.discover()).filter((item) => services.includes(item.service)),
+            ).catch(() => ({}))
           : {}
         return OpenScience.withSubprocessEnv(process.env, async (env, overlay) => {
           const cache = sandbox.sandboxed ? Sandbox.cacheEnvironment(current.scratch ?? current.workspace) : {}

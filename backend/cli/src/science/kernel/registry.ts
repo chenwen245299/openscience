@@ -808,6 +808,9 @@ const entry = async (identity: KernelIdentity, options?: KernelStartOptions, han
       await persist(value)
       const kernel = await value.manager.get(value.key, {
         ...options,
+        ...(current.accessMode === "auto" && current.sandbox.network === "allow"
+          ? { sandboxNetwork: "allow" as const }
+          : {}),
         sessionID: identity.sessionID,
         cwd: current.workspace,
         processOwnership,

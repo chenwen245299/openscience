@@ -30,7 +30,7 @@ test("action access is atomic and isolated to its owning project", async () => {
       directory: first.path,
       fn: async () => {
         const initial = await ProjectAccess.status(Instance.project)
-        expect(initial).toMatchObject({ mode: "approve", source: "default", sandbox: { enabled: true } })
+        expect(initial).toMatchObject({ mode: "auto", source: "default", sandbox: { enabled: true } })
         return ProjectAccess.update(Instance.project, { mode: "full", root: initial.root })
       },
     })
@@ -40,7 +40,7 @@ test("action access is atomic and isolated to its owning project", async () => {
       directory: second.path,
       fn: async () => {
         expect(await ProjectAccess.status(Instance.project)).toMatchObject({
-          mode: "approve",
+          mode: "auto",
           sandbox: { enabled: true },
         })
       },

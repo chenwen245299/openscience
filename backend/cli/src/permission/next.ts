@@ -16,6 +16,8 @@ import { SessionTraceStore } from "@/session/trace-store"
 import { ProjectTrust } from "@/project/trust"
 import { ProjectAccess } from "@/project/access"
 import { ShellRisk } from "./shell-risk"
+import { PermissionJudge } from "./judge"
+import type { MessageV2 } from "@/session/message-v2"
 
 export namespace PermissionNext {
   const log = Log.create({ service: "permission" })
@@ -82,12 +84,32 @@ export namespace PermissionNext {
     }),
   })
 
+  const KernelMetadata = z.object({
+    kernel: z.object({
+      language: z.string().min(1),
+    }),
+  })
+
+  /** The interpreter a kernel language stands for, so one shell policy covers
+   *  both ways of reaching it. A language absent here stays unknown, which is
+   *  the fail-closed direction. */
+  const KERNEL_INTERPRETER: Record<string, string> = { python: "python", r: "Rscript" }
+
   export function risk(permission: string, metadata?: Record<string, unknown>): Risk {
     if (PASSIVE.has(permission)) return "passive"
     if (permission === "bash") {
       const parsed = ShellMetadata.safeParse(metadata)
-      if (!parsed.success) return "unknown"
-      return ShellRisk.classify(parsed.data.shell.command).level
+      if (parsed.success) return ShellRisk.classify(parsed.data.shell.command).level
+      // The kernel tools execute code through an interpreter rather than a
+      // shell line, so they carry their language where bash carries a command.
+      // Without this they fell through to `unknown`, which is an unconditional
+      // ask: `python script.py` through bash was contained and automatic while
+      // the same code through the Python kernel prompted on every run, even
+      // though both are confined to the workspace by the same sandbox.
+      const kernel = KernelMetadata.safeParse(metadata)
+      const interpreter = kernel.success ? KERNEL_INTERPRETER[kernel.data.kernel.language.toLowerCase()] : undefined
+      if (interpreter) return ShellRisk.classify(interpreter).level
+      return "unknown"
     }
     if (CONTAINED.has(permission)) return "contained"
     if (RISKY.has(permission)) return "risky"
@@ -112,6 +134,9 @@ export namespace PermissionNext {
     metadata?: Record<string, unknown>
   }): Action {
     if (input.configured === "deny") return "deny"
+    // Inspect every executable source in auto mode, including interpreter
+    // commands the shallow shell classifier considers contained.
+    if (input.mode === "auto" && input.permission === "bash") return "ask"
     const level = risk(input.permission, input.metadata)
     if (input.mode === "full" && input.permission === "bash") return input.configured
     // Full access already runs `pip install` through the shell without a
@@ -120,8 +145,10 @@ export namespace PermissionNext {
     if (input.mode === "full" && input.permission === "environment_mutation") return "allow"
     if (level === "unknown") return "ask"
     if (input.mode === "ask" && level !== "passive") return "ask"
-    if (input.mode === "approve" && input.permission === "bash" && level === "risky") return "ask"
-    if (input.mode === "approve" && level === "risky") {
+    // Auto can adjudicate network reads as well as executable code in request().
+    const gated = input.mode === "approve" || input.mode === "auto"
+    if (gated && input.permission === "bash" && level === "risky") return "ask"
+    if (gated && level === "risky") {
       return input.granted === "allow" ? "allow" : "ask"
     }
     if (input.configured === "ask" && input.granted === "allow") return "allow"
@@ -376,6 +403,30 @@ export namespace PermissionNext {
     mode: ProjectAccess.Mode.optional(),
   })
 
+  async function review(request: Omit<Request, "id">, signal?: AbortSignal) {
+    const subject = PermissionJudge.subject(request.permission, request.metadata)
+    if (!subject || !request.tool) return undefined
+    const message = await Storage.read<MessageV2.Info>(["message", request.sessionID, request.tool.messageID]).catch(
+      () => undefined,
+    )
+    const model =
+      message?.role === "assistant"
+        ? { providerID: message.providerID, modelID: message.modelID }
+        : message?.role === "user"
+          ? message.model
+          : undefined
+    if (!model) return undefined
+    return PermissionJudge.decide({
+      ...subject,
+      roots: [await SessionFilesystem.workspace(request.sessionID), Instance.directory, Instance.worktree],
+      model,
+      sessionID: request.sessionID,
+      messageID: request.tool.messageID,
+      invocation: `${request.sessionID}:${request.tool.messageID}:${request.tool.callID}`,
+      signal,
+    })
+  }
+
   // The cancellation signal belongs to the running host, never the wire schema.
   export const ask = Object.assign(
     (input: z.infer<typeof Ask>, signal?: AbortSignal) => request(Ask.parse(input), signal),
@@ -447,6 +498,14 @@ export namespace PermissionNext {
       )
     if (mode !== "ask" && request.permission === "external_directory" && (await filesystem(request))) return
     signal?.throwIfAborted()
+    // The selected model's independent review never becomes a session message,
+    // tool result, or trace entry. External filesystem and paid boundaries
+    // still require explicit approval, and configured denies were resolved above.
+    if (mode === "auto" && evaluated.some((rule) => rule.action === "ask")) {
+      const verdict = await review(request, signal)
+      signal?.throwIfAborted()
+      if (verdict?.action === "allow") return
+    }
     if (evaluated.some((rule) => rule.action === "ask")) {
       const id = input.id ?? Identifier.ascending("permission")
       const info: Request = {
@@ -489,7 +548,7 @@ export namespace PermissionNext {
     for (const [id, pending] of Object.entries(s.pending)) {
       if (pending.mode === "ask") continue
       if (
-        pending.mode === "approve" &&
+        (pending.mode === "approve" || pending.mode === "auto") &&
         pending.info.permission === "bash" &&
         risk(pending.info.permission, pending.info.metadata) !== "contained"
       ) {
@@ -557,7 +616,12 @@ export namespace PermissionNext {
           metadata: pending.info.metadata,
         }),
       )
-      if (!actions.length || actions.some((action) => action !== "allow")) {
+      const reviewed =
+        input.mode === "auto" && actions.length > 0 && actions.includes("ask") && !actions.includes("deny")
+          ? await review(pending.info)
+          : undefined
+      if (s.pending[id] !== pending) continue
+      if (!actions.length || (actions.some((action) => action !== "allow") && reviewed?.action !== "allow")) {
         pending.mode = input.mode
         continue
       }
