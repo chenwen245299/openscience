@@ -170,7 +170,7 @@ Configure these repository variables:
 | `WINDOWS_SIGNING_ENDPOINT`  | Account's regional endpoint, such as `https://eus.codesigning.azure.net/` |
 | `WINDOWS_SIGNING_ACCOUNT`   | Artifact Signing account name                                             |
 | `WINDOWS_SIGNING_PROFILE`   | Validated Public Trust certificate profile name                           |
-| `WINDOWS_SIGNING_PUBLISHER` | Exact certificate common name, such as `InkVell Inc.`                     |
+| `WINDOWS_SIGNING_PUBLISHER` | Exact certificate common name, such as `Inkvell Inc.`                     |
 
 The former `WINDOWS_CSC_LINK` and `WINDOWS_CSC_KEY_PASSWORD` secrets are no longer
 used. Until all six values above exist, the publish preflight records a warning

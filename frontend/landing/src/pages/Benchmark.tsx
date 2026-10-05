@@ -246,6 +246,15 @@ export default function Benchmark() {
               <p data-slot="affil">
                 Synthetic Sciences <span aria-hidden>·</span> September 2026
               </p>
+              <aside data-slot="update" role="note">
+                <strong>Update · 1 October 2026</strong>
+                <p>
+                  Quick update on our benchmark results: we found a few issues in our eval setup, and on some benchmarks
+                  our scoring wasn't a perfect comparison with the other agents. We've also seen noticeably weaker
+                  performance on engineering tasks than on the physical sciences, and we're improving the harness to
+                  close that gap. Once that's done, we'll rerun everything and publish the updated results.
+                </p>
+              </aside>
               <div data-slot="actions">
                 <a href="/download" data-slot="button">
                   Download

@@ -42,6 +42,10 @@ Other examples include `OPENAI_API_KEY`, `GEMINI_API_KEY`, and `DEEPSEEK_API_KEY
 
 Remove a saved connection in Customize or with `openscience keys rm`. If a key is still present in your environment or shared workspace, remove that source too.
 
+### GPT-6.1 Sol
+
+Connect an OpenAI API key, then choose **6.1 Sol** in the model picker. OpenScience uses the Responses API for tools and offers **low**, **medium** (default), **high**, **xhigh**, and **max** reasoning. Fast mode costs twice the standard token rates and is unavailable with EU data residency. The previous 6 Sol model remains selectable. Availability depends on your OpenAI API account; this does not add a ChatGPT subscription or Ace route.
+
 ## Use a supported provider sign-in
 
 Where a connection offers browser sign-in, follow that flow instead of entering an API key. For supported ChatGPT access:
@@ -92,6 +96,14 @@ Verified effort choices remain usable while Ace refreshes pricing. Fast appears 
 Open the context indicator for the latest request's token breakdown and the session's recorded model cost. The header and details include the lead's cost and completed direct worker costs, and display small charges below one cent. Recorded Ace turns stay labeled **Ace** if you later switch to provider keys.
 
 The token breakdown separates ordinary input, cache reads, cache writes, and output when reported by the model service. Cache writes are counted once in the total. A reported request charge takes precedence over an estimate from the token rates. Ace applies the same rounding to each reported request charge as Wallet settlement; provider-key costs retain the provider's reported precision.
+
+### GPT-6.1 Sol with ChatGPT
+
+After connecting ChatGPT in **Customize → Models**, choose **6.1 Sol** and its **ChatGPT** access route. The CLI model ID is `openai-codex/gpt-6.1-sol`. It offers **Low, Medium, High, Extra high, and Max** reasoning, plus **Fast** mode. Usage counts against your ChatGPT/Codex allowance; the API-key route remains available separately.
+
+Access depends on OpenAI's rollout and your plan or workspace settings. Enterprise and Edu administrators must enable the model. See [OpenAI's current model availability](https://learn.chatgpt.com/docs/models#gpt-61-sol).
+
+The previous **6 Sol** remains selectable through **ChatGPT** as `openai-codex/gpt-6-sol`, with the same reasoning levels and Fast mode. It is no longer offered through Ace.
 
 ### GPT-6 Astra and Claude Fable 5.1
 

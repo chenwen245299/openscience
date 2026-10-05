@@ -17,7 +17,9 @@ import { terminalArgs, terminalEnv } from "./environment"
 import { Replay } from "./replay"
 import { WindowsJobLauncher } from "@/process/windows-job-launcher"
 import { Filesystem } from "@/util/filesystem"
+import { SessionFilesystem } from "@/session/filesystem"
 import { UpdateQuiescence } from "@/process/update-quiescence"
+import { ProcessIdentity } from "@/process/process-identity"
 
 export namespace Pty {
   const log = Log.create({ service: "pty" })
@@ -32,6 +34,7 @@ export namespace Pty {
     .object({
       id: Identifier.schema("pty"),
       title: z.string(),
+      program: z.literal("claude").optional(),
       command: z.string(),
       args: z.array(z.string()),
       cwd: z.string(),
@@ -48,6 +51,7 @@ export namespace Pty {
   export const CreateInput = z.object({
     sessionID: z.string().startsWith("ses_"),
     title: z.string().optional(),
+    program: z.literal("claude").optional(),
   })
 
   export type CreateInput = z.infer<typeof CreateInput>
@@ -124,15 +128,25 @@ export namespace Pty {
           capability: "terminal",
         })
         const project = authority.directory ?? Instance.directory
-        // Local projects grant their real worktree as a writable root, so an
-        // interactive terminal should open where the user expects. Hosted or
-        // otherwise isolated sessions retain their private session workspace.
-        const cwd = authority.writable.some((root) => Filesystem.contains(root, project))
-          ? project
-          : authority.workspace
-        // Interactive PTY output is not a redaction boundary. Keep provider/cloud
-        // credentials on the host; terminals receive runtime discovery only.
-        const source = OpenScience.kernelEnv(process.env)
+        const filesystem = await SessionFilesystem.snapshot(input.sessionID)
+        // The selected connected folder is the working directory even when
+        // the app stores the project's metadata in an opaque managed root.
+        const selected = authority.workspace !== authority.scratch || filesystem.workingRoot === "scratch"
+        const cwd = selected
+          ? authority.workspace
+          : authority.writable.some((root) => Filesystem.contains(root, project))
+            ? project
+            : authority.workspace
+        // Do not inject OpenScience's provider credential overlay into a user
+        // shell. Its own login files and credential helpers remain available.
+        const source = {
+          ...OpenScience.filterEnvForKernel(process.env),
+          ...Object.fromEntries(
+            ["USERPROFILE", "APPDATA", "LOCALAPPDATA", "HOMEDRIVE", "HOMEPATH", "SSH_AUTH_SOCK", "ZDOTDIR"]
+              .filter((key) => process.env[key] !== undefined)
+              .map((key) => [key, process.env[key]!]),
+          ),
+        }
         const env = terminalEnv(source, Instance.project.id, input.sessionID, command)
         const sandbox = Sandbox.wrapArgv({
           file: command,
@@ -142,7 +156,13 @@ export namespace Pty {
           unreadable: OpenScience.kernelSensitivePaths(),
           options: authority.sandbox,
         })
-        const launch = WindowsJobLauncher.wrap({ file: sandbox.file, args: sandbox.args })
+        const owner = process.platform === "linux" ? await ProcessIdentity.capture(process.pid) : undefined
+        if (process.platform === "linux" && !owner) throw new Error("Could not identify the terminal's owning server")
+        const launch = WindowsJobLauncher.wrap({
+          file: sandbox.file,
+          args: sandbox.args,
+          linuxOwner: owner ? { pid: process.pid, identity: owner } : undefined,
+        })
         log.info("creating session", { id, cmd: command, args, cwd })
 
         const ptyProcess = (() => {
@@ -207,6 +227,7 @@ export namespace Pty {
           sessionID: input.sessionID,
           authorityGeneration: authority.generation,
           windowsRelease: launch.release,
+          containment: process.platform === "linux" ? "linux_subreaper_v1" : undefined,
         }).catch(async (error) => {
           await AuthorityProcessLedger.revoke({ id, kind: "pty" }).catch(() => undefined)
           try {
@@ -215,6 +236,12 @@ export namespace Pty {
           Sandbox.cleanup(sandbox)
           throw error
         })
+        if (registered && process.platform === "linux" && launch.release) {
+          await WindowsJobLauncher.release(launch.release, ptyProcess.pid).catch(async (error) => {
+            await AuthorityProcessLedger.revoke({ id, kind: "pty" })
+            throw error
+          })
+        }
         if (!registered || earlyExit !== undefined) {
           await AuthorityProcessLedger.revoke({ id, kind: "pty" })
           try {
@@ -228,7 +255,8 @@ export namespace Pty {
 
         const info = {
           id,
-          title: input.title || `Terminal ${id.slice(-4)}`,
+          title: input.title || (input.program === "claude" ? "Claude Code" : `Terminal ${id.slice(-4)}`),
+          program: input.program,
           command,
           args,
           cwd,
@@ -247,6 +275,9 @@ export namespace Pty {
         }
         sessions.set(id, session)
         handedOff = true
+        // Fixed input is queued only for an explicitly selected user terminal.
+        // The login shell resolves the CLI using the user’s own setup.
+        if (input.program === "claude") ptyProcess.write("claude\r")
         void Bus.publish(Event.Created, { info })
         return info
       } finally {

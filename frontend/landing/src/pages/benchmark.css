@@ -181,6 +181,23 @@
         opacity: 0.6;
       }
     }
+    [data-slot="update"] {
+      max-width: var(--col);
+      margin: 0 auto 1.8rem;
+      padding: 0.8rem 1rem;
+      border-left: 2px solid var(--accent);
+      text-align: left;
+      color: var(--ink);
+      font-size: 0.95rem;
+      line-height: 1.55;
+      strong {
+        display: block;
+        margin-bottom: 0.3rem;
+        color: var(--accent);
+        font-size: 0.82rem;
+        font-weight: 500;
+      }
+    }
     [data-slot="actions"] {
       display: flex;
       flex-wrap: wrap;

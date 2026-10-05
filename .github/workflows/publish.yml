@@ -830,6 +830,17 @@ jobs:
         if: matrix.signing == 'windows' && needs.version.outputs.windows_signing != 'true'
         shell: bash
         run: echo "::warning::Windows Artifact Signing is not configured for this repository; ${{ matrix.asset }} is published unsigned."
+      - name: Load Windows signature verifier
+        if: matrix.signing == 'windows' && needs.version.outputs.windows_signing == 'true'
+        shell: bash
+        env:
+          RELEASE_SOURCE: ${{ needs.version.outputs.source }}
+          WORKFLOW_SOURCE: ${{ needs.version.outputs.workflow_source }}
+        run: |
+          if [[ "$WORKFLOW_SOURCE" != "$RELEASE_SOURCE" ]]; then
+            git fetch origin "$WORKFLOW_SOURCE" --depth=1
+            git show "$WORKFLOW_SOURCE:tooling/repo/verify-windows-signatures.ps1" > tooling/repo/verify-windows-signatures.ps1
+          fi
       - name: Authenticate Windows signer
         if: steps.existing.outputs.found != 'true' && matrix.signing == 'windows' && needs.version.outputs.windows_signing == 'true'
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
@@ -837,6 +848,29 @@ jobs:
           client-id: ${{ secrets.WINDOWS_SIGNING_CLIENT_ID }}
           tenant-id: ${{ secrets.WINDOWS_SIGNING_TENANT_ID }}
           allow-no-subscriptions: true
+      - name: Sign bundled Windows runtime
+        if: steps.existing.outputs.found != 'true' && matrix.signing == 'windows' && needs.version.outputs.windows_signing == 'true'
+        shell: pwsh
+        env:
+          OPENSCIENCE_DESKTOP_SIDECAR: ${{ github.workspace }}/${{ matrix.sidecar }}
+          WINDOWS_SIGNING_ENDPOINT: ${{ vars.WINDOWS_SIGNING_ENDPOINT }}
+          WINDOWS_SIGNING_ACCOUNT: ${{ vars.WINDOWS_SIGNING_ACCOUNT }}
+          WINDOWS_SIGNING_PROFILE: ${{ vars.WINDOWS_SIGNING_PROFILE }}
+          WINDOWS_SIGNING_PUBLISHER: ${{ vars.WINDOWS_SIGNING_PUBLISHER }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # electron-builder does not traverse resources/sidecar when signing the app.
+          # Sign the verified source binary before it is copied into the installer.
+          Install-Module -Name TrustedSigning -MinimumVersion 0.5.0 -Force -Repository PSGallery -Scope CurrentUser
+          Invoke-TrustedSigning `
+            -Endpoint $env:WINDOWS_SIGNING_ENDPOINT `
+            -CodeSigningAccountName $env:WINDOWS_SIGNING_ACCOUNT `
+            -CertificateProfileName $env:WINDOWS_SIGNING_PROFILE `
+            -Files $env:OPENSCIENCE_DESKTOP_SIDECAR `
+            -FileDigest SHA256 `
+            -TimestampRfc3161 'http://timestamp.acs.microsoft.com' `
+            -TimestampDigest SHA256
+          & ./tooling/repo/verify-windows-signatures.ps1 -Files $env:OPENSCIENCE_DESKTOP_SIDECAR -Publisher $env:WINDOWS_SIGNING_PUBLISHER
       - name: Make sidecar executable
         if: steps.existing.outputs.found != 'true' && matrix.target != 'win'
         shell: bash
@@ -858,7 +892,13 @@ jobs:
       - name: Build desktop installer
         if: steps.existing.outputs.found != 'true'
         shell: bash
-        run: bun run --cwd frontend/desktop dist -- --${{ matrix.target }} --${{ matrix.arch }}
+        run: |
+          if [[ "$OPENSCIENCE_DESKTOP_SIGNED" == "true" ]]; then
+            # Repeated extensions must precede --config so electron-builder keeps the array.
+            (cd frontend/desktop && bunx electron-builder -c.win.signExts=.dll -c.win.signExts=.node --config electron-builder.mjs --publish never --${{ matrix.target }} --${{ matrix.arch }})
+          else
+            bun run --cwd frontend/desktop dist -- --${{ matrix.target }} --${{ matrix.arch }}
+          fi
         env:
           OPENSCIENCE_DESKTOP_SIDECAR: ${{ github.workspace }}/${{ matrix.sidecar }}
           OPENSCIENCE_VERSION: ${{ needs.version.outputs.version }}

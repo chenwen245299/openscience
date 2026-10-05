@@ -632,6 +632,8 @@ export namespace Provider {
   // while current snapshots preserve the upstream ids.
   const CODEX_MODEL_IDS = new Set([
     "gpt-6-astra",
+    "gpt-6-sol",
+    "gpt-6.1-sol",
     "gpt-5.6-sol",
     "gpt-5-6-sol",
     "gpt-5.6-terra",
@@ -651,7 +653,12 @@ export namespace Provider {
   }
 
   function codexOAuthModes(modelID: string) {
-    if (!/^gpt-5[.-](?:4|5|6(?:-(?:sol|terra|luna))?)$/.test(modelID)) return undefined
+    if (
+      modelID !== "gpt-6-sol" &&
+      modelID !== "gpt-6.1-sol" &&
+      !/^gpt-5[.-](?:4|5|6(?:-(?:sol|terra|luna))?)$/.test(modelID)
+    )
+      return undefined
     return {
       fast: {
         provider: {
@@ -745,6 +752,54 @@ export namespace Provider {
       cache_read: 1,
       cache_write: 12.5,
       tiers: [{ input: 20, output: 75, cache_read: 2, cache_write: 25, tier: { type: "context", size: 272_000 } }],
+    },
+    limit: { context: 1_050_000, input: 922_000, output: 128_000 },
+    modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+    options: {},
+  } satisfies ModelsDev.Model
+
+  const SOL6 = {
+    id: "gpt-6-sol",
+    name: "GPT-6 Sol",
+    family: "gpt",
+    release_date: "",
+    knowledge: "2026-04-20",
+    provider: { npm: "@ai-sdk/openai" },
+    attachment: true,
+    reasoning: true,
+    reasoning_options: [{ type: "effort", values: ["none", "low", "medium", "high", "xhigh", "max"] }],
+    temperature: false,
+    tool_call: true,
+    cost: {
+      input: 2,
+      output: 10,
+      cache_read: 0.2,
+      cache_write: 2.5,
+      tiers: [{ input: 4, output: 15, cache_read: 0.4, cache_write: 5, tier: { type: "context", size: 272_000 } }],
+    },
+    limit: { context: 1_050_000, input: 922_000, output: 128_000 },
+    modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+    options: {},
+  } satisfies ModelsDev.Model
+
+  const SOL61 = {
+    id: "gpt-6.1-sol",
+    name: "GPT-6.1 Sol",
+    family: "gpt",
+    release_date: "2026-09-29",
+    knowledge: "2026-04-30",
+    provider: { npm: "@ai-sdk/openai" },
+    attachment: true,
+    reasoning: true,
+    reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],
+    temperature: false,
+    tool_call: true,
+    cost: {
+      input: 2,
+      output: 10,
+      cache_read: 0.1,
+      cache_write: 2.5,
+      tiers: [{ input: 4, output: 15, cache_read: 0.2, cache_write: 5, tier: { type: "context", size: 272_000 } }],
     },
     limit: { context: 1_050_000, input: 922_000, output: 128_000 },
     modalities: { input: ["text", "image", "pdf"], output: ["text"] },
@@ -1072,8 +1127,8 @@ export namespace Provider {
     }
   }
 
-  export function normalizeAstraRequestBody(value: Record<string, unknown>) {
-    if (value.model !== "gpt-6-astra") return value
+  export function normalizeOpenAIReasoningRequestBody(value: Record<string, unknown>) {
+    if (value.model !== "gpt-6-astra" && value.model !== "gpt-6.1-sol") return value
     const body = { ...value }
     for (const key of ["temperature", "top_p", "logprobs", "top_logprobs"]) delete body[key]
     if (Array.isArray(body.include)) {
@@ -1313,8 +1368,8 @@ export namespace Provider {
       const baseURL = Env.get("OPENAI_BASE_URL")
       return {
         autoload: false,
-        async getModel(sdk: any, modelID: string, _options?: Record<string, any>) {
-          return sdk.responses(modelID)
+        async getModel(sdk: ReturnType<typeof createOpenAI>, modelID: string, options?: Record<string, unknown>) {
+          return options?.api === "chat" ? sdk.chat(modelID) : sdk.responses(modelID)
         },
         options: baseURL && !hasManagedProxyPath(baseURL) ? { baseURL } : {},
       }
@@ -2124,7 +2179,7 @@ export namespace Provider {
     // class) but models.dev's snapshot can lag a launch, so the direct route
     // would lose the tier the Ace route offers for the same model.
     const openai: NonNullable<Model["modes"]> =
-      provider.id === "openai" && /^gpt-6-(?:astra|sol|luna)$/.test(model.id) && !direct.fast
+      provider.id === "openai" && /^gpt-(?:6-(?:astra|sol|luna)|6\.1-sol)$/.test(model.id) && !direct.fast
         ? { fast: priority() }
         : {}
     const result = provider.id === "openrouter" ? openrouter : { ...direct, ...xai, ...openai }
@@ -2234,7 +2289,7 @@ export namespace Provider {
   export function fromModelsDevProvider(provider: ModelsDev.Provider): Info {
     const reviewed =
       provider.id === "openai"
-        ? [ASTRA]
+        ? [ASTRA, SOL61]
         : provider.id === "anthropic"
           ? [FABLE51]
           : provider.id === "openrouter"
@@ -2244,6 +2299,7 @@ export namespace Provider {
       (provider.id === "zai" || provider.id === "zhipuai") && !provider.models[GLM53.id]
         ? { ...provider.models, [GLM53.id]: GLM53 }
         : { ...provider.models }
+    if (provider.id === "openai" && !models[SOL6.id]) models[SOL6.id] = SOL6
     for (const model of reviewed) {
       models[model.id] = { ...provider.models[model.id], ...model, experimental: undefined }
     }
@@ -2524,11 +2580,12 @@ export namespace Provider {
             // Keep each model's catalog window. Flattening the whole Codex
             // family to a legacy input allowance made flagship and mini
             // models advertise the same, incorrect context in every picker.
-            limit: id === "gpt-6-astra" ? { context: 872_000, output: 128_000 } : { ...model.limit },
+            limit:
+              id === "gpt-6-astra" || id === "gpt-6-sol" ? { context: 872_000, output: 128_000 } : { ...model.limit },
             // The subscription catalog advertises a smaller default/maximum
             // context than the public API. Ultra is a Codex orchestration mode,
             // not an additional Responses reasoning.effort value.
-            ...(id === "gpt-6-astra"
+            ...(id === "gpt-6-astra" || id === "gpt-6-sol"
               ? {
                   contextOptions: [272_000, 872_000],
                   reasoningOptions: [
@@ -2654,7 +2711,7 @@ export namespace Provider {
         continue
       }
       const result = await fn(data)
-      if (result && (result.autoload || providers[providerID])) {
+      if (result && (result.autoload || providers[providerID] || configProviders.some(([id]) => id === providerID))) {
         if (result.getModel) modelLoaders[providerID] = result.getModel
         const opts = result.options ?? {}
         // A loader-reported source wins; otherwise use "custom" only for a
@@ -2693,6 +2750,11 @@ export namespace Provider {
       }
 
       const auth = authEntries[providerID]
+      // Saved endpoint preferences survive key removal, but cannot authenticate a connection.
+      if (provider.options.requiresCredential && !auth && !effectiveKey(provider) && !provider.options.tokenCommand) {
+        delete providers[providerID]
+        continue
+      }
       // An explicit OAuth record is the credential authority. Strip any stale
       // retired token or proxy values before constructing its SDK request.
       if (auth?.type === "oauth") {
@@ -3007,6 +3069,7 @@ export namespace Provider {
       const s = await state()
       const provider = s.providers[model.providerID]
       const options = { ...provider.options }
+      delete options.requiresCredential
 
       if (
         provider.source === "managed" &&
@@ -3091,7 +3154,7 @@ export namespace Provider {
         // Message, Reasoning, FunctionCall, LocalShellCall, CustomToolCall, WebSearchCall
         // IDs are only re-attached for Azure with store=true
         if (model.api.npm === "@ai-sdk/openai" && opts.body && opts.method === "POST") {
-          const body = normalizeAstraRequestBody(JSON.parse(opts.body as string))
+          const body = normalizeOpenAIReasoningRequestBody(JSON.parse(opts.body as string))
           const isAzure = model.providerID.includes("azure")
           const keepIds = isAzure && body.store === true
           if (!keepIds && Array.isArray(body.input)) {
@@ -3376,7 +3439,8 @@ export namespace Provider {
     }
 
     const providers = Object.values(available)
-    const configured = (p: Info) => !cfg.provider || Object.keys(cfg.provider).includes(p.id)
+    const configured = (p: Info) =>
+      !Object.keys(cfg.provider ?? {}).length || Object.keys(cfg.provider ?? {}).includes(p.id)
     const candidates = providers.filter((p) => configured(p))
     const provider = candidates.find((p) => Object.keys(p.models).length > 0) ?? candidates[0]
     if (!provider) throw new Error(NO_PROVIDER_HINT)

@@ -1243,6 +1243,7 @@ export type EventSessionError = {
 export type Pty = {
   id: string
   title: string
+  program?: "claude"
   command: string
   args: Array<string>
   cwd: string
@@ -2011,6 +2012,10 @@ export type ProviderConfig = {
   blacklist?: Array<string>
   options?: {
     apiKey?: string
+    /**
+     * Keep saved connection settings inactive without a credential.
+     */
+    requiresCredential?: boolean
     baseURL?: string
     /**
      * Shell command whose stdout is a short-lived bearer token. Sent as 'Authorization: Bearer <token>' on every request and re-minted automatically before the token's JWT exp (or every request for a non-JWT token). Use for providers behind rotating/SSO-minted credentials.
@@ -2223,7 +2228,7 @@ export type Config = {
     deliverables?: boolean
     acceptance?: boolean
     /**
-     * Under autonomous autonomy, a final answer that asks the user to upload, provide, confirm or choose is answered once: proceed on the inputs as supplied, state the assumption, deliver
+     * Under autonomous autonomy, a final answer that asks the user to upload, provide, confirm or choose is answered once: proceed on the inputs as supplied, state the assumption, deliver; a turn that asked before calling any tool is told to stop instead when the message asked for no work
      */
     unattended?: boolean
     /**
@@ -10160,6 +10165,46 @@ export type SettingsWalletGetResponses = {
 
 export type SettingsWalletGetResponse = SettingsWalletGetResponses[keyof SettingsWalletGetResponses]
 
+export type SettingsSearchData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/settings/search"
+}
+
+export type SettingsSearchResponses = {
+  /**
+   * Search setup
+   */
+  200: {
+    configured: boolean
+  }
+}
+
+export type SettingsSearchResponse = SettingsSearchResponses[keyof SettingsSearchResponses]
+
+export type AuthConnectionData = {
+  body?: {
+    key?: string
+    baseURL?: string
+    api?: "responses" | "chat"
+  }
+  path: {
+    providerID: string
+  }
+  query?: never
+  url: "/auth/{providerID}/connection"
+}
+
+export type AuthConnectionResponses = {
+  /**
+   * Saved connection
+   */
+  200: boolean
+}
+
+export type AuthConnectionResponse = AuthConnectionResponses[keyof AuthConnectionResponses]
+
 export type AuthOnboardingData = {
   body?: ApiAuth
   path: {
@@ -10889,6 +10934,7 @@ export type PtyCreateData = {
   body?: {
     sessionID: string
     title?: string
+    program?: "claude"
   }
   path?: never
   query?: {

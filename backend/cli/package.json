@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "2.0.147",
+  "version": "2.0.150",
   "name": "@synsci/openscience",
   "type": "module",
   "description": "AI-powered CLI for ML research and development workflows",
@@ -96,6 +96,6 @@
     "xdg-basedir": "5.1.0",
     "yargs": "18.1.0",
     "zod": "catalog:",
-    "zod-to-json-schema": "3.24.5"
+    "zod-to-json-schema": "3.25.2"
   }
 }

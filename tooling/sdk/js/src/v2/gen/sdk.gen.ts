@@ -27,6 +27,7 @@ import type {
   AppSkillsResponses,
   AppSkillWriteResponses,
   Auth as Auth3,
+  AuthConnectionResponses,
   AuthOnboardingErrors,
   AuthOnboardingResponses,
   AuthRemoveErrors,
@@ -404,6 +405,7 @@ import type {
   SettingsScientificToolSetupErrors,
   SettingsScientificToolSetupResponses,
   SettingsScientificToolsResponses,
+  SettingsSearchResponses,
   SettingsSkillsAddRootErrors,
   SettingsSkillsAddRootResponses,
   SettingsSkillsInstallErrors,
@@ -2501,6 +2503,18 @@ export class Settings extends HeyApiClient {
     })
   }
 
+  /**
+   * Research search configuration
+   *
+   * Whether research_search has a configured Firecrawl or Ace credential. Does not verify quota, network permissions, or provider availability.
+   */
+  public search<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<SettingsSearchResponses, unknown, ThrowOnError>({
+      url: "/settings/search",
+      ...options,
+    })
+  }
+
   private _credentials?: Credentials
   get credentials(): Credentials {
     return (this._credentials ??= new Credentials({ client: this.client }))
@@ -2568,6 +2582,43 @@ export class Settings extends HeyApiClient {
 }
 
 export class Auth extends HeyApiClient {
+  /**
+   * Save a provider credential and API endpoint
+   */
+  public connection<ThrowOnError extends boolean = false>(
+    parameters: {
+      providerID: string
+      key?: string
+      baseURL?: string
+      api?: "responses" | "chat"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "providerID" },
+            { in: "body", key: "key" },
+            { in: "body", key: "baseURL" },
+            { in: "body", key: "api" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).put<AuthConnectionResponses, unknown, ThrowOnError>({
+      url: "/auth/{providerID}/connection",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
   /**
    * Configure an onboarding provider credential
    *
@@ -3137,6 +3188,7 @@ export class Pty extends HeyApiClient {
       directory?: string
       sessionID: string
       title?: string
+      program?: "claude"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3148,6 +3200,7 @@ export class Pty extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "body", key: "sessionID" },
             { in: "body", key: "title" },
+            { in: "body", key: "program" },
           ],
         },
       ],

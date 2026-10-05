@@ -77,7 +77,9 @@ test("Ace preserves reviewed fallback models but requires approval for new bound
         expect(provider.source).toBe("managed")
         const available = MANAGED_OPENROUTER_MODELS.filter((id) => !MANAGED_MODEL_DETAILS[id].requiresApproval)
         expect(Object.keys(provider.models).sort()).toEqual([...available].sort())
-        expect(Object.keys(provider.models)).toHaveLength(21)
+        expect(Object.keys(provider.models)).toHaveLength(20)
+        expect(provider.models["openai/gpt-6-sol"]).toBeUndefined()
+        await expect(Provider.getModel("openrouter", "openai/gpt-6-sol")).rejects.toThrow()
         expect(provider.models["anthropic/claude-fable-5.1"]).toBeUndefined()
         expect(provider.models["anthropic/claude-fable-5"]).toBeUndefined()
         await expect(Provider.getModel("openrouter", "google/gemini-3.7-flash")).rejects.toThrow()
@@ -97,7 +99,7 @@ test("Ace preserves reviewed fallback models but requires approval for new bound
         // documents are cleared on the Ace route even for multimodal models.
         expect(provider.models["google/gemini-3.8-flash"].capabilities.input.video).toBe(false)
         expect(provider.models["google/gemini-3.8-flash"].capabilities.input.image).toBe(true)
-        for (const id of ["openai/gpt-6-sol", "openai/gpt-6-luna"]) {
+        for (const id of ["openai/gpt-6-luna"]) {
           expect(Object.keys(provider.models[id].variants ?? {})).toEqual([
             "none",
             "low",
@@ -155,6 +157,14 @@ test("Codex OAuth allowlist includes the GPT-5.6 family", () => {
   }
 })
 
+test("Codex OAuth includes the exact GPT-6.1 Sol model without inventing adjacent models", () => {
+  expect(Provider.isCodexOAuthModel("gpt-6-sol")).toBe(true)
+  expect(Provider.isCodexOAuthModel("gpt-6.1-sol")).toBe(true)
+  for (const id of ["gpt-6.1", "gpt-6.1-sol-pro", "gpt-6.1-astra", "gpt-6.1-luna"]) {
+    expect(Provider.isCodexOAuthModel(id)).toBe(false)
+  }
+})
+
 test("synthesized Codex OAuth models use Codex variants and preserve model-specific context", async () => {
   const previous = await Auth.get("openai-codex")
   await using tmp = await tmpdir({
@@ -191,6 +201,30 @@ test("synthesized Codex OAuth models use Codex variants and preserve model-speci
         expect(Object.keys(sol.modes ?? {})).toEqual(["fast"])
         expect(sol.modes?.fast.provider?.body).toEqual({ service_tier: "priority" })
 
+        const sol6 = codex.models["gpt-6-sol"]
+        expect(sol6.providerID).toBe("openai-codex")
+        expect(sol6.api.id).toBe("gpt-6-sol")
+        expect(sol6.api.npm).toBe("@ai-sdk/openai")
+        expect(sol6.limit).toEqual({ context: 872_000, output: 128_000 })
+        expect(sol6.contextOptions).toEqual([272_000, 872_000])
+        expect(sol6.cost).toEqual({ input: 0, output: 0, cache: { read: 0, write: 0 } })
+        expect(Object.keys(sol6.variants ?? {})).toEqual(["low", "medium", "high", "xhigh", "max"])
+        expect(sol6.modes?.fast.provider?.body).toEqual({ service_tier: "priority" })
+        expect(sol6.modes?.fast.cost).toBeUndefined()
+        expect(providers.openai?.models[sol6.id].cost.input).toBe(2)
+
+        const sol61 = codex.models["gpt-6.1-sol"]
+        expect(sol61.providerID).toBe("openai-codex")
+        expect(sol61.api.id).toBe("gpt-6.1-sol")
+        expect(sol61.api.npm).toBe("@ai-sdk/openai")
+        expect(sol61.cost).toEqual({ input: 0, output: 0, cache: { read: 0, write: 0 } })
+        expect(sol61.contextOptions).toEqual([272_000, 1_050_000])
+        expect(Object.keys(sol61.variants ?? {})).toEqual(["low", "medium", "high", "xhigh", "max"])
+        expect(Object.keys(sol61.modes ?? {})).toEqual(["fast"])
+        expect(sol61.modes?.fast.provider?.body).toEqual({ service_tier: "priority" })
+        expect(sol61.modes?.fast.cost).toBeUndefined()
+        expect(providers.openai?.models[sol61.id].cost.input).toBe(2)
+
         const codex54 = codex.models["gpt-5.4"]
         expect(codex54.limit.context).toBe(1_050_000)
         expect(Object.keys(codex54.variants ?? {})).toEqual(["low", "medium", "high", "xhigh"])
@@ -207,7 +241,9 @@ test("synthesized Codex OAuth models use Codex variants and preserve model-speci
         expect(astra.modes).toBeUndefined()
         expect(Object.keys(astra.variants ?? {})).toEqual(["low", "medium", "high", "xhigh", "max"])
         for (const [id, model] of Object.entries(codex.models)) {
-          expect(model.limit.context).toBe(id === "gpt-6-astra" ? 872_000 : providers.openai?.models[id]?.limit.context)
+          expect(model.limit.context).toBe(
+            id === "gpt-6-astra" || id === "gpt-6-sol" ? 872_000 : providers.openai?.models[id]?.limit.context,
+          )
         }
         expect(Object.keys(publicSol?.variants ?? {})).toEqual(["none", "low", "medium", "high", "xhigh", "max"])
       },
@@ -1089,13 +1125,14 @@ test("parseModel handles model IDs with slashes", () => {
   expect(result.modelID).toBe("anthropic/claude-3-opus")
 })
 
-test("defaultModel returns first available model when no config set", async () => {
+test.each([undefined, {}])("defaultModel finds available models with empty provider config %j", async (provider) => {
   await using tmp = await tmpdir({
     init: async (dir) => {
       await Bun.write(
         path.join(dir, "openscience.json"),
         JSON.stringify({
           $schema: "https://syntheticsciences.ai/config.json",
+          provider,
         }),
       )
     },
