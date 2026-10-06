@@ -40,7 +40,7 @@ Under **General → Data & privacy**, review **Share session traces** and delive
 
 Use **Show reasoning and activity / Hide reasoning and activity** above a turn to expand or collapse its steps. Each turn remembers its own choice; changing one does not move or hide the history in other turns. New live turns open automatically and stay open when they finish; a turn you explicitly collapse stays collapsed. Answers, scientific results, pending approvals/questions, and failed tool calls remain visible when steps are collapsed.
 
-There is no separate global reasoning toggle or Detailed/Compact mode. Readable provider text is shown inline, with routine action headings omitted. Providers may supply summaries or no readable reasoning; OpenScience cannot reveal private reasoning the provider did not send.
+There is no separate global reasoning toggle or Detailed/Compact mode. **Thinking / Thought** rows start collapsed, both while the model is responding and after it finishes. Click a row to read the provider text; your choice stays in place through updates and completion. Routine action headings are omitted. Providers may supply summaries or no readable reasoning; OpenScience cannot reveal private reasoning the provider did not send.
 
 Consecutive reasoning fragments appear in one expandable row. Completed reads, searches, and edits stay grouped while a long task runs; expand a group to inspect each original tool result. Failures and pending requests remain separate. Patch summaries count the files reported by the tool.
 

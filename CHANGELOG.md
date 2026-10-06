@@ -8,6 +8,15 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ## Unreleased
 
+- Present retained papers as numbered cards with compact topic summaries and full selection evidence; add a separate Findings view with extracted values, quoted context, source papers, and verification status, and clarify the inputs actually used by database retrieval.
+- Explain every retained paper and shortlisted molecule in Design run with per-item selection reasons and expandable evidence, including ranking, structural checks, diversity, design intent, and SA or gate fallbacks.
+- Display Design run source and tool logos on transparent backgrounds.
+- Default model Thinking and Thought rows to collapsed, while preserving manual expansion through streaming and completion.
+- Summarize molecular design steps in the Design run panel with searched sources, paper selections and reasons, candidate filtering, and outputs for the next step.
+- Keep Design run results and expanded lists stable during live refreshes. Add search-source logos and expandable hit counts with the saved results for each query.
+- Make Design run stages and outputs collapsible, distinguish kept papers from grey excluded results, show retained papers and reasons inside Output, and identify molecular tools with logos.
+- Mark completed Design run steps with solid green circles and bold white checks, and use hollow circles for unfinished steps.
+- Preserve Design run results after completion and across panel reopenings, restore saved runs per session, and let users switch between runs to review earlier steps.
 - Default new projects to Agent decides: the active model reviews commands and script sources in a separate JSON-only request outside conversation history, automatically allowing low-risk project work and public data retrieval while keeping high-risk actions under user approval. Enable reviewed sandbox networking for shell and Python/R execution without injecting publishing credentials into public downloads.
 - Let sandboxed macOS Git load Xcode's required runtime libraries without widening filesystem write access.
 

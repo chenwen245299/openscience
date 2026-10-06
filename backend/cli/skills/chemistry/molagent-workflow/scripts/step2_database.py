@@ -111,8 +111,10 @@ def retrieve(goal: dict, seeds: list[str], per_query: int, output_dir: str) -> t
             for molecule in molecules:
                 molecule["retrieved_by"] = f"{route}:{label}"
             pool.extend(molecules)
-            attempts.append({"route": route, "query": label, "cids": len(cids), "molecules": len(molecules), "ok": True})
-            log_provenance(output_dir, "step2", "retrieve", {"route": route, "query": label, "hits": len(molecules)})
+            records = [{"title": molecule.get("name") or molecule["id"], "url": molecule["url"]} for molecule in molecules]
+            result = {"source": "pubchem", "route": route, "query": label, "hits": len(molecules), "records": records}
+            attempts.append({**result, "cids": len(cids), "molecules": len(molecules), "ok": True})
+            log_provenance(output_dir, "step2", "retrieve", result)
             print(f"  {route:14s} {label:28s} {len(molecules):4d} molecules")
         except FetchError as exc:
             attempts.append({"route": route, "query": label, "ok": False, "error": exc.message, "status": exc.status})
@@ -208,6 +210,7 @@ def evaluate(molecules: list[dict], goal: dict) -> list[dict]:
             molecule["ml"] = prediction
         blended = predictor.blend(proxy, prediction, goal)
         molecule["score"] = blended["score"]
+        blended["components"] = photophysics.rank_terms(profile, goal)
         molecule["ranking"] = blended
     return molecules
 
@@ -226,16 +229,26 @@ def diversify(molecules: list[dict], keep: int) -> list[dict]:
 
     selected: list[dict] = []
     fingerprints: list = []
-    for molecule in ordered:
+    for rank, molecule in enumerate(ordered, 1):
         mol = Chem.MolFromSmiles(molecule["smiles"])
         if mol is None:
             continue
         fingerprint = generator.GetFingerprint(mol)
+        details = [f"Score rank #{rank} of {len(ordered)} before diversity filtering; shortlist limit {keep}"]
         if fingerprints:
             similarity = max(DataStructs.BulkTanimotoSimilarity(fingerprint, fingerprints))
             if similarity > 0.6:
                 molecule["thinned_as_similar"] = round(similarity, 3)
                 continue
+            details.append(f"Maximum Tanimoto similarity to earlier selections {similarity:.3f} <= 0.600")
+        else:
+            details.append("First selection by score; no earlier selected molecule for a diversity comparison")
+        molecule["selection_reason"] = (
+            f"Passed hard structural checks; score rank #{rank} of {len(ordered)}; retained after diversity filtering"
+            if molecule["gate"]["pass"] else
+            f"Fallback selection at score rank #{rank} of {len(ordered)}: hard checks failed; review required"
+        )
+        molecule["selection_details"] = details
         selected.append(molecule)
         fingerprints.append(fingerprint)
         if len(selected) >= keep:

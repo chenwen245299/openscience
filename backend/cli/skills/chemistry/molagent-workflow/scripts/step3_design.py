@@ -399,6 +399,7 @@ def evaluate(designed: list[dict], goal: dict, parents_by_smiles: dict[str, dict
             candidate["ml"] = prediction
         blended = predictor.blend(proxy, prediction, goal)
         candidate["score"] = blended["score"]
+        blended["components"] = photophysics.rank_terms(profile, goal)
         candidate["ranking"] = blended
         candidate["synthesizability"] = synthesizability(mol)
         candidate["properties"] = {
@@ -423,7 +424,23 @@ def select(candidates: list[dict], keep: int, max_sa: float) -> list[dict]:
         if not c["synthesizability"].get("available") or c["synthesizability"]["sa_score"] <= max_sa
     ]
     pool = buildable or passing or candidates
-    return sorted(pool, key=lambda c: c["score"], reverse=True)[:keep]
+    selected = sorted(pool, key=lambda c: c["score"], reverse=True)[:keep]
+    for rank, candidate in enumerate(selected, 1):
+        sa = candidate["synthesizability"]
+        details = [f"Score rank #{rank} of {len(pool)} in the eligible pool; shortlist limit {keep}"]
+        if sa.get("available"):
+            details.append(f"Synthetic accessibility estimate {sa['sa_score']:.2f}; requested maximum {max_sa:.2f}")
+        else:
+            details.append("Synthetic accessibility score unavailable; allowed without SA filtering, not confirmed easy to synthesize")
+        if buildable:
+            basis = "Passed hard checks and the SA filter" if sa.get("available") else "Passed hard checks; SA unavailable, admitted without the SA filter"
+        elif passing:
+            basis = "Fallback: no hard-check-passing design met the SA limit; retained despite high SA"
+        else:
+            basis = "Fallback: no design passed hard checks; retained for review"
+        candidate["selection_reason"] = f"{basis}; score rank #{rank} of {len(pool)}"
+        candidate["selection_details"] = details
+    return selected
 
 
 # ---------------------------------------------------------------------------

@@ -760,7 +760,7 @@ def gate(prof: dict, goal: dict) -> dict:
         check(
             "aqueous_handle",
             soluble,
-            "no ionic or PEG solubilising group; expect formulation into nanoparticles",
+            "ionic or PEG solubilising group detected" if soluble else "no ionic or PEG solubilising group; expect formulation into nanoparticles",
             severity="soft",
         )
 
@@ -782,14 +782,10 @@ def gate(prof: dict, goal: dict) -> dict:
     }
 
 
-def rank_score(prof: dict, goal: dict) -> float:
-    """
-    One number for ordering candidates against a GoalSpec. Combines the
-    channel balance the goal asks for with the structural prerequisites.
-    Range is roughly 0-1; it is ordinal, not calibrated.
-    """
+def rank_terms(prof: dict, goal: dict) -> dict[str, float]:
+    """Weighted contributions used for both ordering and the selection explanation."""
     if "error" in prof:
-        return 0.0
+        return {}
 
     modalities = set(goal.get("modalities", []))
     share = prof["channel_balance"]["share"]
@@ -811,7 +807,17 @@ def rank_score(prof: dict, goal: dict) -> float:
     conjugation_fit = min(prof["conjugation"]["path"] / 24.0, 1.0)
     penalties = 0.1 * gate(prof, goal)["soft_failures"]
 
-    return round(max(0.0, 0.45 * wanted + 0.3 * band_fit + 0.25 * conjugation_fit - penalties), 4)
+    return {
+        "target_channels": 0.45 * wanted,
+        "spectral_band": 0.3 * band_fit,
+        "conjugation": 0.25 * conjugation_fit,
+        "unmet_preferences": -penalties,
+    }
+
+
+def rank_score(prof: dict, goal: dict) -> float:
+    """Ordinal structural ranking score, not calibrated molecular performance."""
+    return round(max(0.0, sum(rank_terms(prof, goal).values())), 4)
 
 
 if __name__ == "__main__":

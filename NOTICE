@@ -6,6 +6,19 @@ Licensed under the Apache License, Version 2.0.
 
 It bundles or accesses the following third-party software and services.
 
+Search-source and tool marks (frontend/workspace/src/atlas/assets/sources/)
+OpenAlex / OurResearch: https://github.com/ourresearch/openalex-website
+arXiv: https://github.com/arXiv/arxiv-docs/tree/develop/source/brand
+Europe PMC / EMBL-EBI: https://github.com/EuropePMC/techblog
+PubChem / NCBI / NLM: https://pubchem.ncbi.nlm.nih.gov/
+RDKit contributors: https://www.rdkit.org/Images/logo.png
+These unmodified marks identify queried sources and tools. They remain the property of
+their respective owners. Europe PMC outreach materials are CC BY-SA 4.0:
+https://europepmc.org/Outreach
+Thank you to arXiv for use of its open access interoperability. This product
+was not reviewed or approved by, nor does it necessarily express or reflect
+the policies or opinions of, arXiv.
+
 --------------------------------------------------------------------------------
 OpenCode
 https://github.com/anomalyco/opencode · https://opencode.ai

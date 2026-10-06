@@ -178,15 +178,7 @@ function TraceGroupRow(props: {
   changes?: { additions: number; deletions: number }
   children: JSX.Element
 }) {
-  const [manual, setManual] = createSignal<boolean>()
-  // Reasoning that streamed while the reader watched stays readable after it
-  // ends; finishing must not fold text away under someone reading it. A
-  // thought loaded from history opens on request. The reader's own choice wins.
-  const [streamed, setStreamed] = createSignal(false)
-  createEffect(() => {
-    if (props.live) setStreamed(true)
-  })
-  const open = () => manual() ?? (!!props.live || streamed())
+  const [open, setOpen] = createSignal(false)
   // A burst of one call is that call's own row: nothing to fold, so it never
   // sits inside a collapsible that a finished turn would close over it.
   if (props.header === false) {
@@ -216,7 +208,7 @@ function TraceGroupRow(props: {
   return (
     <Collapsible
       open={open()}
-      onOpenChange={(value) => setManual(value)}
+      onOpenChange={setOpen}
       // Nested parts stay mounted while folded: a pending request or a draft
       // answer inside a burst must survive the fold, and find-in-page still works.
       forceMount

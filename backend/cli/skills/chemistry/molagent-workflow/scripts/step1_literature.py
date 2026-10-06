@@ -164,26 +164,56 @@ def _sources(paper: dict) -> list[str]:
     return paper.get("found_by") or [paper.get("source", "unknown")]
 
 
-def relevance(paper: dict, concepts: list[str]) -> float:
-    """Concept coverage in title and abstract, with mild citation and recency terms."""
-    haystack = f"{paper['title']} {paper.get('abstract', '')}".lower()
-    covered = sum(1 for c in concepts if c.lower() in haystack)
-    score = covered / max(len(concepts), 1)
-    # Title hits count double; a review of the exact topic beats a passing mention.
-    title = paper["title"].lower()
-    score += 0.5 * sum(1 for c in concepts if c.lower() in title) / max(len(concepts), 1)
-    # Citations help but must not bury a 2025 paper under a 2010 one.
+def relevance_terms(paper: dict, concepts: list[str]) -> dict[str, float]:
+    """Keep the explanation and the ranking on the same scoring terms."""
     import math
 
-    score += min(math.log1p(paper.get("citations") or 0) / 12.0, 0.4)
+    haystack = f"{paper['title']} {paper.get('abstract', '')}".lower()
+    covered = sum(1 for c in concepts if c.lower() in haystack)
+    title = paper["title"].lower()
     year = paper.get("year") or 0
-    if year >= 2022:
-        score += 0.25
-    elif year >= 2018:
-        score += 0.1
-    if "review" in title or "perspective" in title:
-        score += 0.15
-    return round(score, 4)
+    return {
+        "topic coverage": covered / max(len(concepts), 1),
+        "title matches": 0.5 * sum(1 for c in concepts if c.lower() in title) / max(len(concepts), 1),
+        "citations": min(math.log1p(paper.get("citations") or 0) / 12.0, 0.4),
+        "publication year": 0.25 if year >= 2022 else 0.1 if year >= 2018 else 0.0,
+        "review/perspective title": 0.15 if "review" in title or "perspective" in title else 0.0,
+    }
+
+
+def relevance(paper: dict, concepts: list[str]) -> float:
+    """Concept coverage in title and abstract, with mild citation and recency terms."""
+    return round(sum(relevance_terms(paper, concepts).values()), 4)
+
+
+def explain_selection(paper: dict, concepts: list[str], rank: int, total: int, keep: int) -> None:
+    title = [c for c in concepts if c.lower() in paper["title"].lower()]
+    abstract = paper.get("abstract") or ""
+    matched = [c for c in concepts if c.lower() in abstract.lower()]
+    reasons = []
+    if title:
+        reasons.append(f"Title matches: {', '.join(title)}")
+    if matched:
+        reasons.append(f"Abstract matches: {', '.join(matched)}")
+    if not reasons:
+        reasons.append("No requested concepts matched; retained on metadata ranking" if concepts else "No topic concepts supplied; retained on metadata ranking")
+    reasons.append(f"Ranked #{rank} of {total}; top {keep} requested")
+    paper["selection_reason"] = "; ".join(reasons)
+    contributions = "; ".join(
+        f"{label} +{value:.4f}" for label, value in relevance_terms(paper, concepts).items() if value
+    )
+    details = [f"Relevance score {paper['relevance']:.4f}: {contributions or 'no positive scoring terms'}"]
+    missing = [c for c in concepts if c not in title and c not in matched]
+    if missing:
+        details.append(f"Not matched in saved title/abstract: {', '.join(missing)}")
+    for concept in matched:
+        start = abstract.lower().find(concept.lower())
+        excerpt = abstract[max(0, start - 50):start + len(concept) + 100].strip()
+        details.append(f'Abstract evidence for {concept}: “{excerpt}”')
+    if not abstract:
+        details.append("No abstract was available; selection used the title and metadata only")
+    details.append("Keyword ranking for full-text review; retention does not verify the paper's claims or every design requirement")
+    paper["selection_details"] = details
 
 
 # ---------------------------------------------------------------------------
@@ -271,9 +301,14 @@ def run(goal: dict, output_dir: str, per_source: int, keep: int, mailto: str | N
         ):
             try:
                 hits = fn(query)
+                records = [
+                    {key: paper.get(key) for key in ("title", "year", "doi", "url")}
+                    for paper in hits
+                ]
                 collected.extend(hits)
-                attempts.append({"query": query, "source": name, "hits": len(hits), "ok": True})
-                log_provenance(output_dir, "step1", "search", {"source": name, "query": query, "hits": len(hits)})
+                result = {"query": query, "source": name, "hits": len(hits), "records": records}
+                attempts.append({**result, "ok": True})
+                log_provenance(output_dir, "step1", "search", result)
             except FetchError as exc:
                 # One source failing must not lose the other two.
                 attempts.append({"query": query, "source": name, "ok": False, "error": exc.message, "status": exc.status})
@@ -291,6 +326,19 @@ def run(goal: dict, output_dir: str, per_source: int, keep: int, mailto: str | N
         paper["relevance"] = relevance(paper, concepts)
     unique.sort(key=lambda p: p["relevance"], reverse=True)
     selected = unique[:keep]
+    for rank, paper in enumerate(selected, 1):
+        explain_selection(paper, concepts, rank, len(unique), keep)
+    excluded = [
+        {
+            "title": paper["title"],
+            "year": paper.get("year"),
+            "doi": paper.get("doi"),
+            "url": paper.get("url"),
+            "source": paper.get("source"),
+            "selection_reason": f"Below the top {keep} in relevance ranking",
+        }
+        for paper in unique[keep:]
+    ]
 
     findings: list[dict] = []
     for paper in selected:
@@ -307,6 +355,7 @@ def run(goal: dict, output_dir: str, per_source: int, keep: int, mailto: str | N
         "unique": len(unique),
         "selected": len(selected),
         "papers": selected,
+        "excluded_papers": excluded,
         "findings": findings,
         "to_verify": [
             f"Read the source and confirm `{q}` before using it as a design target" for q in to_verify

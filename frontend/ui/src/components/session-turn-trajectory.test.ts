@@ -538,32 +538,51 @@ describe("reasoning rows", () => {
     expect(again.textContent).not.toContain("Compact")
   })
 
-  test("reasoning that streamed while the reader watched stays readable once it ends", async () => {
-    const [store, setStore] = reactive.createStore<Store>({
-      ...empty(),
-      session_status: { [sessionID]: { type: "busy" } },
-      message: { [sessionID]: [user, assistant()] },
-      part: { [user.id]: [], msg_0002: [reasoning("prt_stay", { start: Date.now() - 2_000 })] },
-    })
-    const host = mount(() => turn.SessionTurn({ sessionID, messageID: user.id, lastUserMessageID: user.id }), store)
-    await ready(() => host.querySelector('[data-slot="reasoning-part-body"] p') !== null)
-    expect(host.querySelector('[data-component="trace-group"][data-kind="thought"]')?.getAttribute("data-live")).toBe(
-      "true",
-    )
-    // The thought ends and the turn finishes: the text the reader was following
-    // does not fold away under them. A thought loaded later opens on request.
-    setStore("part", "msg_0002", 0, { ...reasoning("prt_stay", { start: Date.now() - 2_000, end: Date.now() }) })
-    setStore("message", sessionID, 1, { ...assistant(Date.now()) })
-    setStore("session_status", sessionID, { type: "idle" })
-    await settle()
-    expect(host.querySelector('[data-component="trace-group"][data-kind="thought"]')?.getAttribute("data-live")).toBe(
-      null,
-    )
-    expect(host.querySelector('[data-slot="reasoning-part-body"]')?.textContent).toContain(
-      "Comparing the two assay formats",
-    )
-    expect(host.querySelector('[data-component="trace-row"]')?.textContent).toMatch(/^Thought \d+s$/)
-  })
+  test.each([false, true])(
+    "thoughts start collapsed and preserve the reader's expansion choice %j through streaming and completion",
+    async (expanded) => {
+      const reason = reasoning("prt_stay", { start: Date.now() - 2_000 })
+      const [store, setStore] = reactive.createStore<Store>({
+        ...empty(),
+        session_status: { [sessionID]: { type: "busy" } },
+        message: { [sessionID]: [user, assistant()] },
+        part: { [user.id]: [], msg_0002: [reason] },
+      })
+      const host = mount(() => turn.SessionTurn({ sessionID, messageID: user.id, lastUserMessageID: user.id }), store)
+      await ready(() => host.querySelector('[data-slot="reasoning-part-body"] p') !== null)
+      expect(host.querySelector('[data-component="trace-group"][data-kind="thought"]')?.getAttribute("data-live")).toBe(
+        "true",
+      )
+      const group = host.querySelector('[data-component="trace-group"][data-kind="thought"]')!
+      const toggle = group.querySelector<HTMLButtonElement>('[data-slot="collapsible-trigger"]')!
+      const content = group.querySelector('[data-slot="collapsible-content"]')!
+      expect(toggle.getAttribute("aria-expanded")).toBe("false")
+      expect(content.hasAttribute("data-closed")).toBe(true)
+      if (expanded) toggle.click()
+      await ready(() => toggle.getAttribute("aria-expanded") === String(expanded))
+      setStore("part", "msg_0002", 0, { ...reason, text: "Comparing the two assay formats. More streamed reasoning." })
+      await ready(() => content.textContent?.includes("More streamed reasoning.") === true)
+      expect(content.hasAttribute("data-closed")).toBe(!expanded)
+
+      setStore("part", "msg_0002", 0, { ...reasoning("prt_stay", { start: Date.now() - 2_000, end: Date.now() }) })
+      setStore("message", sessionID, 1, { ...assistant(Date.now()) })
+      setStore("session_status", sessionID, { type: "idle" })
+      await settle()
+      expect(host.querySelector('[data-component="trace-group"][data-kind="thought"]')?.getAttribute("data-live")).toBe(
+        null,
+      )
+      expect(host.querySelector('[data-slot="reasoning-part-body"]')?.textContent).toContain(
+        "Comparing the two assay formats",
+      )
+      expect(host.querySelector('[data-component="trace-row"]')?.textContent).toMatch(/^Thought \d+s$/)
+      expect(host.querySelector('[data-component="trace-group"][data-kind="thought"]')).toBe(group)
+      expect(toggle.getAttribute("aria-expanded")).toBe(String(expanded))
+      expect(content.hasAttribute("data-closed")).toBe(!expanded)
+      toggle.click()
+      await ready(() => toggle.getAttribute("aria-expanded") === String(!expanded))
+      expect(content.hasAttribute("data-closed")).toBe(expanded)
+    },
+  )
 
   test("completed turns start quietly collapsed and can open without a settings callback", async () => {
     const message = assistant(2_000)
