@@ -22,6 +22,12 @@ New trusted projects default to **Agent decides**. Saved choices and organizatio
 
 Project-local reads, edits, deletions, tests, computation, and public internet retrieval are low risk. A new public host alone does not require approval. External personal files, credential access or disclosure, private network services, system changes, publishing, messages, and spending require approval. Explicit denies remain effective. If the review times out, the response is invalid, or a source cannot be safely inspected, the action asks for approval instead of running automatically.
 
+App-managed scientific Python/R interpreters may be installed below the configuration directory's data-root link. Invoking that interpreter passes to the model's code review; its installation path alone is not treated as reading credentials. Code and arguments that access actual credential files remain subject to the same checks.
+
+Script inspection follows static working-directory changes such as `cd run && python3 review.py`, including quoted paths and subshell boundaries, so the reviewer sees the script that will actually run. Statically imported app-bundled skill modules are included as read-only source for review; this does not grant access to unrelated external files or permit changes to bundled code. Unresolvable dynamic paths still ask for approval, and inspection failures are recorded separately from model risk verdicts.
+
+Saved scripts may retain a previous app version's bundled-module path. An older cached module can be inspected only when its complete source exactly matches the corresponding module shipped with the current app. This authorizes that source file for review, not the old cache directory; changed or unrelated external code still requires approval.
+
 In **Ask risky**, research searches and WebFetch reads from enabled Network groups or custom allowed domains proceed without another tool approval, including in delegated workers. The literature group includes arXiv, ACL Anthology, OpenReview, and major conference archives. A new destination or redirect outside that list still asks for network approval. **Ask always** still asks, and explicit tool rules remain effective in every mode. Local and private network addresses remain blocked by the retrieval broker.
 
 **Independence** controls how the agent handles decisions and questions. **Tools → Action approval** controls execution permissions; choosing Independent does not change that permission mode.

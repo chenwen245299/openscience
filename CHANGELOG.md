@@ -8,6 +8,11 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ## Unreleased
 
+- Keep saved research scripts compatible with earlier bundled module paths when their source exactly matches the current app; inspect only that file without granting access to the old cache directory.
+- Fix Python source inspection after shell directory changes and include statically imported bundled skill modules in isolated risk review; add a fixed literature run/source interface that retrieves, caches and saves addressed full-text evidence without agent-written download scripts.
+- Remove the separate Values view from molecular literature review; present Findings as body-reviewed design principles, precautions and techniques with verifiable paper citations, keep numerical evidence inside paper cards, and carry all takeaways into database and design outputs.
+- Fix managed scientific interpreter paths being mistaken for credential access before Auto's model review, preventing repeated approvals for ordinary Python/R project work.
+- Read priority molecular-design paper bodies before database selection; have the research agent synthesize source-addressed structural guidance, use reviewed motifs in PubChem retrieval and soft ranking, and show actionable Findings separately from abstract number leads.
 - Present retained papers as numbered cards with compact topic summaries and full selection evidence; add a separate Findings view with extracted values, quoted context, source papers, and verification status, and clarify the inputs actually used by database retrieval.
 - Explain every retained paper and shortlisted molecule in Design run with per-item selection reasons and expandable evidence, including ranking, structural checks, diversity, design intent, and SA or gate fallbacks.
 - Display Design run source and tool logos on transparent backgrounds.

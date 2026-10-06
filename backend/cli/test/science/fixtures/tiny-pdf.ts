@@ -9,7 +9,8 @@ export function tinyPDF(lines: string[]): Uint8Array {
   const pagesRef = objects.length + 1 + lines.length * 2
   const pageRefs: number[] = []
   for (const line of lines) {
-    const stream = `BT /F1 12 Tf 72 720 Td (${line.replace(/[()\\]/g, "\\$&")}) Tj ET`
+    const text = line.split("\n").map((row) => `(${row.replace(/[()\\]/g, "\\$&")}) Tj`).join(" T* ")
+    const stream = `BT /F1 12 Tf 14 TL 72 720 Td ${text} ET`
     const content = add(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`)
     const page = add(
       `<< /Type /Page /Parent ${pagesRef} 0 R /MediaBox [0 0 612 792] /Contents ${content} 0 R /Resources << /Font << /F1 ${font} 0 R >> >> >>`,

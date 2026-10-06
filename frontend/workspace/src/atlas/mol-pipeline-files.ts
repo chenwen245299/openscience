@@ -25,7 +25,7 @@ export async function readPipeline(dir: string, files: PipelineFiles): Promise<S
   })
   const entries = await Promise.all(
     run.stages
-      .filter((stage) => stage.status === "ok" && ARTIFACT_FILES[stage.key])
+      .filter((stage) => (stage.status === "ok" || stage.status === "awaiting_review") && ARTIFACT_FILES[stage.key])
       .map(async (stage) => {
         const content = await files.read(`${dir}/${ARTIFACT_FILES[stage.key]}`)
         return [stage.key, content ? parseArtifact(content) : undefined] as const

@@ -12,9 +12,13 @@ import { Shell } from "../../src/shell/shell"
 import { Config } from "../../src/config/config"
 import { Filesystem } from "../../src/util/filesystem"
 import { Tool } from "../../src/tool/tool"
+import { PermissionJudge } from "../../src/permission/judge"
+import { ProjectAccess } from "../../src/project/access"
 
-async function context() {
+async function context(mode?: "approve") {
   const session = await executionSession()
+  if (mode)
+    await ProjectAccess.update(Instance.project, { mode, root: (await ProjectAccess.status(Instance.project)).root })
   return {
     sessionID: session.id,
     messageID: "",
@@ -30,6 +34,37 @@ async function context() {
 const projectRoot = path.join(__dirname, "../..")
 
 describe("tool.bash", () => {
+  test("sends the script in the changed directory to the approval reviewer", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const ctx = await context()
+        const workspace = await SessionFilesystem.workspace(ctx.sessionID)
+        const run = path.join(workspace, "design")
+        await Bun.write(path.join(run, "review.py"), "import helper\nprint(helper.value)\n")
+        await Bun.write(path.join(run, "helper.py"), "value = 42\n")
+        const requests: Record<string, unknown>[] = []
+        const execute = {
+          ...ctx,
+          ask: async (request: { metadata: Record<string, unknown> }) => {
+            requests.push(request.metadata)
+          },
+        }
+        const result = await (
+          await BashTool.init()
+        ).execute(
+          { command: "cd design && python3 review.py", description: "Build review in the run directory" },
+          execute,
+        )
+        expect(result.metadata.exit, result.output).toBe(0)
+        const subject = requests.map((metadata) => PermissionJudge.subject("bash", metadata)).find(Boolean)
+        expect(subject?.files).toEqual([path.join(run, "review.py")])
+        expect(await PermissionJudge.inspect({ ...subject!, roots: [workspace] })).toContain("value = 42")
+      },
+    })
+  })
+
   test("normalizes common provider argument dialects", () => {
     expect(normalizeBashInput({ cmd: "pwd" })).toMatchObject({
       command: "pwd",
@@ -194,7 +229,7 @@ describe("tool.bash permissions", () => {
         const bash = await BashTool.init()
         const requests: Array<Omit<PermissionNext.Request, "id" | "sessionID" | "tool">> = []
         const testCtx = {
-          ...(await context()),
+          ...(await context("approve")),
           ask: async (req: Omit<PermissionNext.Request, "id" | "sessionID" | "tool">) => {
             requests.push(req)
           },
@@ -209,7 +244,9 @@ describe("tool.bash permissions", () => {
         expect(requests.length).toBe(1)
         expect(requests[0].permission).toBe("bash")
         expect(requests[0].patterns).toContain("echo hello")
-        expect(requests[0].metadata).toEqual({ shell: { command: "echo hello" } })
+        expect(requests[0].metadata).toEqual({
+          shell: { command: "echo hello", cwd: await SessionFilesystem.workspace(testCtx.sessionID), files: [] },
+        })
       },
     })
   })
@@ -222,7 +259,7 @@ describe("tool.bash permissions", () => {
         const bash = await BashTool.init()
         const requests: Array<Omit<PermissionNext.Request, "id" | "sessionID" | "tool">> = []
         const testCtx = {
-          ...(await context()),
+          ...(await context("approve")),
           ask: async (req: Omit<PermissionNext.Request, "id" | "sessionID" | "tool">) => {
             requests.push(req)
           },
@@ -238,7 +275,13 @@ describe("tool.bash permissions", () => {
         expect(requests[0].permission).toBe("bash")
         expect(requests[0].patterns).toContain("echo foo")
         expect(requests[0].patterns).toContain("echo bar")
-        expect(requests[0].metadata).toEqual({ shell: { command: "echo foo && echo bar" } })
+        expect(requests[0].metadata).toEqual({
+          shell: {
+            command: "echo foo && echo bar",
+            cwd: await SessionFilesystem.workspace(testCtx.sessionID),
+            files: [],
+          },
+        })
       },
     })
   })
@@ -361,7 +404,7 @@ describe("tool.bash permissions", () => {
         const bash = await BashTool.init()
         const requests: Array<Omit<PermissionNext.Request, "id" | "sessionID" | "tool">> = []
         const testCtx = {
-          ...(await context()),
+          ...(await context("approve")),
           ask: async (req: Omit<PermissionNext.Request, "id" | "sessionID" | "tool">) => {
             requests.push(req)
           },
@@ -415,7 +458,7 @@ describe("tool.bash permissions", () => {
       directory: tmp.path,
       fn: async () => {
         const bash = await BashTool.init()
-        const base = await context()
+        const base = await context("approve")
         const command = process.platform === "win32" ? "cd" : "pwd"
         const result = await bash.execute(
           {

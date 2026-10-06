@@ -8,11 +8,8 @@ import path from "path"
 import DESCRIPTION from "./bash.txt"
 import { Log } from "../util/log"
 import { Instance } from "../project/instance"
-import { lazy } from "@synsci/util/lazy"
-import { Language } from "web-tree-sitter"
 
 import { $ } from "bun"
-import { fileURLToPath } from "url"
 import { Flag } from "@/flag/flag.ts"
 import { Shell } from "@/shell/shell"
 
@@ -33,7 +30,7 @@ import { CommandRuntime } from "@/science/command/registry"
 import { AuthoritySignal } from "@/project/authority-signal"
 import { KernelEnvironmentMutation } from "@/science/kernel/environment-mutation"
 import { FileOutputReceipts } from "@/file/output-receipts"
-import { PermissionJudge } from "@/permission/judge"
+import { shellParser, shellSources } from "@/permission/shell-source"
 
 const MAX_METADATA_LENGTH = 30_000
 /** How often the live output card is refreshed while a command runs. */
@@ -154,34 +151,6 @@ async function provenance(input: {
   )
 }
 
-const resolveWasm = (asset: string) => {
-  if (asset.startsWith("file://")) return fileURLToPath(asset)
-  if (asset.startsWith("/") || /^[a-z]:/i.test(asset)) return asset
-  const url = new URL(asset, import.meta.url)
-  return fileURLToPath(url)
-}
-
-const parser = lazy(async () => {
-  const { Parser } = await import("web-tree-sitter")
-  const { default: treeWasm } = await import("web-tree-sitter/tree-sitter.wasm" as string, {
-    with: { type: "wasm" },
-  })
-  const treePath = resolveWasm(treeWasm)
-  await Parser.init({
-    locateFile() {
-      return treePath
-    },
-  })
-  const { default: bashWasm } = await import("tree-sitter-bash/tree-sitter-bash.wasm" as string, {
-    with: { type: "wasm" },
-  })
-  const bashPath = resolveWasm(bashWasm)
-  const bashLanguage = await Language.load(bashPath)
-  const p = new Parser()
-  p.setLanguage(bashLanguage)
-  return p
-})
-
 // TODO: we may wanna rename this tool so it works better on other shells
 export const BashTool = Tool.define("bash", async () => {
   const shell = Shell.forTool()
@@ -234,7 +203,7 @@ export const BashTool = Tool.define("bash", async () => {
         throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
       }
       const timeout = params.timeout ?? DEFAULT_TIMEOUT
-      const tree = await parser().then((p) => p.parse(params.command))
+      const tree = await shellParser().then((p) => p.parse(params.command))
       if (!tree) {
         throw new Error("Failed to parse command")
       }
@@ -345,7 +314,11 @@ export const BashTool = Tool.define("bash", async () => {
       // command. Auto reviews their source before enabling sockets, while the
       // sandbox continues to enforce the same filesystem roots.
       const reviewedNetwork = authority.accessMode === "auto" && authority.sandbox.network === "allow"
-      const shellMetadata = { command: params.command, cwd, files: PermissionJudge.files(parsed) }
+      const source = await shellSources(tree.rootNode, cwd).then(
+        (files) => ({ files }),
+        () => ({ inspectionError: "script working directory cannot be resolved" }),
+      )
+      const shellMetadata = { command: params.command, cwd, ...source }
 
       for (const [directory, access] of directories) {
         const granted =

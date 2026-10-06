@@ -3,6 +3,8 @@ import z from "zod"
 import { Log } from "@/util/log"
 import { Filesystem } from "@/util/filesystem"
 import { OpenScience } from "@/openscience"
+import { Global } from "@/global"
+import { BundledSkills } from "@/skill/bundled"
 
 /** A separate, context-free request to the executing model. Verdicts authorize
  * one tool invocation; they never become standing filesystem or network grants. */
@@ -20,7 +22,7 @@ export namespace PermissionJudge {
     reason: string
     source: "veto" | "model" | "cache" | "unavailable"
   }
-  export type Subject = { command: string; cwd?: string; files?: string[] }
+  export type Subject = { command: string; cwd?: string; files?: string[]; inspectionError?: string }
   export type Input = Subject & {
     roots: string[]
     model: { providerID: string; modelID: string }
@@ -56,8 +58,20 @@ export namespace PermissionJudge {
     },
   ]
 
-  export function veto(command: string): string | undefined {
-    for (const entry of VETO) if (entry.pattern.test(command)) return entry.reason
+  export function veto(command: string, runtimeRoot = Global.Path.data): string | undefined {
+    // The managed interpreter lives below the config/data-root link. Only
+    // its executable position is exempt; arguments and script contents still
+    // pass through every credential check and the independent code review.
+    const inspected = command.replace(
+      /(^|[;&|\n])(\s*)(["']?)(\/[^\s"';&|]+)\3(?=\s|$)/g,
+      (token, boundary: string, space: string, quote: string, executable: string) => {
+        const relative = path.relative(path.join(runtimeRoot, "conda", "envs"), executable)
+        if (!/^[\w-]+\/bin\/(?:python[\d.]*|Rscript)$/.test(relative) || path.normalize(executable) !== executable)
+          return token
+        return `${boundary}${space}${quote}${path.basename(executable)}${quote}`
+      },
+    )
+    for (const entry of VETO) if (entry.pattern.test(inspected)) return entry.reason
     return undefined
   }
 
@@ -68,6 +82,8 @@ export namespace PermissionJudge {
     "Project-only changes are LOW RISK even if destructive, uncommitted, or not reversible. Do not require approval for them.",
     "LOW RISK: retrieving public internet data, literature, APIs, and downloads into the project; a new public hostname alone is not risky.",
     "LOW RISK: ordinary project-local dependency installs and standard interpreter/system library reads necessary to run project code.",
+    "LOW RISK: reading and importing the supplied app-bundled skill source under readonlyCode. It remains subject to source review; this does not authorize other external files or writes to bundled code.",
+    "The app-managed Python/R executable may live beneath .config/openscience/data-root/conda/envs. Invoking that interpreter is not credential access; inspect its code and arguments. Other files beneath .config/openscience remain outside the project.",
     "HIGH RISK: reading, changing, deleting, or uploading the user's files outside these project roots (including paths escaping via symlinks).",
     "HIGH RISK: accessing personal/private services, LAN/loopback services, cloud metadata, another computer, or unrelated databases.",
     "HIGH RISK: accessing secret stores or exposing API keys, passwords, tokens, private keys, auth cookies, or environment secrets in output or outbound requests.",
@@ -106,6 +122,7 @@ export namespace PermissionJudge {
   /** Inspect complete local sources before disclosing anything to the model.
    * Missing, oversized, or external sources fail closed, without truncation. */
   export async function inspect(input: Subject & { roots: string[] }) {
+    if (input.inspectionError) throw new Error(input.inspectionError)
     await OpenScience.refreshByokSecrets(process.env)
     const cwd = input.cwd ?? input.roots[0]
     if (!cwd) throw new Error("missing project root")
@@ -114,11 +131,22 @@ export namespace PermissionJudge {
     if (!canonical || !roots.some((root) => root && Filesystem.contains(root, canonical)))
       throw new Error("working directory is outside the project")
     const queue = [...new Set(input.files ?? [])]
+    const readonlyCode = new Set<string>()
     const dependencies = async (content: string, directory: string) => {
+      const imports = [directory, canonical]
+      for (const match of content.matchAll(
+        /sys\.path\.(?:insert|append)\(\s*(?:\d+\s*,\s*)?(["'][^"'\n]+["']|\w+)\s*\)/g,
+      )) {
+        const value = match[1]
+        const literal = /^["']/.test(value)
+          ? value.slice(1, -1)
+          : content.match(new RegExp(`(?:^|\\n)\\s*${value}\\s*=\\s*["']([^"'\\n]+)["']`))?.[1]
+        if (literal) imports.push(path.resolve(directory, literal))
+      }
       for (const match of content.matchAll(/(?:^|\n|["'])\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))/g)) {
         const module = match[1] ?? match[2]
         const relative = module.startsWith(".") ? module.replace(/^\./, "") : module
-        for (const base of [directory, canonical]) {
+        for (const base of imports) {
           for (const suffix of [".py", "/__init__.py"]) {
             const candidate = path.resolve(base, relative.replaceAll(".", "/") + suffix)
             if (await Bun.file(candidate).exists()) queue.push(candidate)
@@ -140,10 +168,33 @@ export namespace PermissionJudge {
       const target = await Filesystem.canonical(path.resolve(canonical, name))
       // A heredoc may create the script earlier in this same command. The
       // reviewer receives its complete inline source through command instead.
-      if (!(await Bun.file(path.resolve(canonical, name)).exists()) && input.command.includes("<<")) continue
+      if (!(await Bun.file(path.resolve(canonical, name)).exists())) {
+        if (input.command.includes("<<")) continue
+        throw new Error(`script cannot be inspected: ${name}`)
+      }
       if (!target) throw new Error(`script cannot be inspected: ${name}`)
-      if (!roots.some((root) => root && Filesystem.contains(root, target)))
-        throw new Error("script is outside the project")
+      if (!roots.some((root) => root && Filesystem.contains(root, target))) {
+        const bundled = await BundledSkills.root().then((root) => (root ? Filesystem.canonical(root) : undefined))
+        if (!bundled) throw new Error("script is outside the project")
+        if (Filesystem.contains(bundled, target)) readonlyCode.add(bundled)
+        else {
+          // Saved research scripts retain an earlier bundle's absolute path.
+          // Authorize only the identical shipped source, never the old folder.
+          const history = await Filesystem.canonical(path.join(Global.Path.cache, "bundled-skills"))
+          if (!history || !Filesystem.contains(history, target)) throw new Error("script is outside the project")
+          const relative = path.relative(history, target)
+          const legacy = relative.match(/^[a-f0-9]{64}[/\\](.+)$/)?.[1]
+          const current = legacy ? await Filesystem.canonical(path.join(bundled, legacy)) : undefined
+          if (!current || !Filesystem.contains(bundled, current)) throw new Error("script is outside the project")
+          const original = Bun.file(current)
+          const previous = Bun.file(target)
+          if (original.size > SOURCE_LIMIT || previous.size > SOURCE_LIMIT || !(await original.exists()))
+            throw new Error("script is outside the project")
+          if (!Buffer.from(await original.bytes()).equals(Buffer.from(await previous.bytes())))
+            throw new Error("external script differs from bundled source")
+          readonlyCode.add(target)
+        }
+      }
       if (seen.has(target)) continue
       seen.add(target)
       if (seen.size > FILE_LIMIT) throw new Error("too many script dependencies to inspect")
@@ -161,7 +212,13 @@ export namespace PermissionJudge {
     if (blocked) throw new Error(blocked)
     const command = OpenScience.redactSecrets(input.command)
     if (command !== input.command) throw new Error("command contains secret material")
-    const payload = JSON.stringify({ project: roots, cwd: canonical, command, scripts })
+    const payload = JSON.stringify({
+      project: roots,
+      readonlyCode: [...readonlyCode],
+      cwd: canonical,
+      command,
+      scripts,
+    })
     if (payload.length > SOURCE_LIMIT) throw new Error("source is too large to inspect")
     return payload
   }
@@ -173,7 +230,12 @@ export namespace PermissionJudge {
   export async function decide(input: Input): Promise<Decision> {
     const blocked = veto(input.command)
     if (blocked) return { action: "ask", reason: blocked, source: "veto" }
-    const payload = await inspect(input).catch(() => undefined)
+    const payload = await inspect(input).catch((error: unknown) => {
+      log.warn("source inspection failed; asking the user", {
+        reason: error instanceof Error ? OpenScience.redactSecrets(error.message) : "inspection failed",
+      })
+      return undefined
+    })
     if (!payload) return { action: "ask", reason: "command sources cannot be safely inspected", source: "veto" }
     const key = input.invocation ? JSON.stringify([input.invocation, input.model, payload]) : undefined
     const cached = key ? cache.get(key) : undefined
@@ -233,6 +295,7 @@ export namespace PermissionJudge {
           command: z.string().min(1),
           cwd: z.string().optional(),
           files: z.string().array().optional(),
+          inspectionError: z.string().optional(),
         }),
       })
       .safeParse(metadata)

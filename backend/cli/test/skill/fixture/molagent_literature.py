@@ -49,7 +49,7 @@ step1.ARXIV = base + "/arxiv"
 goal = {"question": "Design an NIR-II luminogen", "keywords": {"queries": ["NIR-II"], "concepts": ["NIR-II"]}}
 try:
     with tempfile.TemporaryDirectory() as directory:
-        pack = step1.run(goal, directory, per_source=10, keep=1, mailto=None)
+        pack = step1.run(goal, directory, per_source=10, keep=1, mailto=None, full_texts=0)
         write_artifact(directory, "evidence", pack)
         saved = read_artifact(directory, "evidence")
         assert (saved["found"], saved["unique"], saved["selected"]) == (4, 3, 1)
@@ -61,8 +61,9 @@ try:
         assert saved["papers"][0]["relevance"] == 1.75
         assert len(saved["excluded_papers"]) == 2
         assert all(paper["selection_reason"] == "Below the top 1 in relevance ranking" for paper in saved["excluded_papers"])
-        assert all(finding["verified"] is False for finding in saved["findings"])
-        assert saved["findings"]
+        assert all(finding["verified"] is False for finding in saved["observations"])
+        assert saved["observations"] and not saved["findings"]
+        assert saved["review"]["status"] == "pending"
         assert [len(attempt["records"]) for attempt in saved["attempts"]] == [2, 1, 1]
         assert all(len(attempt["records"]) == attempt["hits"] for attempt in saved["attempts"])
         assert saved["attempts"][0]["records"][0] == {
@@ -73,7 +74,7 @@ try:
         trace = [json.loads(line) for line in (Path(directory) / "provenance.jsonl").read_text().splitlines()]
         assert [entry["records"] for entry in trace] == [attempt["records"] for attempt in saved["attempts"]]
         step1.ARXIV = base + "/missing"
-        partial = step1.run(goal, directory, per_source=10, keep=1, mailto=None)
+        partial = step1.run(goal, directory, per_source=10, keep=1, mailto=None, full_texts=0)
         assert len(partial["papers"]) == 1
         assert any(attempt["source"] == "arxiv" and not attempt["ok"] for attempt in partial["attempts"])
 

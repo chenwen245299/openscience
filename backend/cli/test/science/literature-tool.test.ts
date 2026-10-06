@@ -100,6 +100,106 @@ describe("literature search", () => {
 })
 
 describe("literature read", () => {
+  test("run/source retrieves Europe PMC body XML and saves citable evidence automatically", async () => {
+    const body =
+      "Extending the conjugated scaffold changes the absorption window; compare donor and acceptor substitutions under the same conditions. ".repeat(
+        14,
+      )
+    const hits: string[] = []
+    route((url) => {
+      hits.push(url)
+      return new Response(
+        `<article><front><abstract><p>ABSTRACT ${body}</p></abstract></front><body><sec><title>Design rationale</title><p>${body}</p></sec></body><back><ref-list><p>REFERENCES ${body}</p></ref-list></back></article>`,
+        { headers: { "content-type": "application/xml" } },
+      )
+    })
+    await Instance.provide({
+      directory: dir,
+      fn: async () => {
+        const session = await executionSession()
+        const workspace = await SessionFilesystem.workspace(session.id)
+        const output = path.join(workspace, "design")
+        const source = "10.1000/design.xml"
+        await Bun.write(
+          path.join(output, "evidence_pack.json"),
+          JSON.stringify({
+            papers: [{ title: "Design paper", doi: source, pmcid: "PMC1234" }],
+            findings: [],
+            review: { status: "pending" },
+          }),
+        )
+        const tool = await LiteratureTool.init()
+        const result = await tool.execute({ action: "read", run: output, source }, ctx(session.id))
+        expect(result.metadata.status).toBe("full")
+        expect(result.output).toContain("[block 0 · Design rationale]")
+        expect(result.output).not.toContain("ABSTRACT")
+        expect(hits).toEqual(["https://www.ebi.ac.uk/europepmc/webservices/rest/PMC1234/fullTextXML"])
+        const pack = await Bun.file(path.join(output, "evidence_pack.json")).json()
+        expect(pack.papers[0].full_text).toMatchObject({ status: "retrieved", reviewed: false, source })
+        expect((await Bun.file(path.join(output, pack.papers[0].full_text.path)).json()).blocks).toEqual([
+          { section: "Design rationale", text: body.trim() },
+        ])
+        await tool.execute({ action: "read", run: output, source, query: "donor" }, ctx(session.id))
+        expect(hits).toHaveLength(1)
+        expect(pack.review.status).toBe("pending")
+        expect(pack.findings).toEqual([])
+      },
+    })
+  })
+
+  test("run/source resolves a DOI and falls back from a landing page to a readable PDF", async () => {
+    const text =
+      "Extending the conjugated scaffold changes the absorption window; compare donor and acceptor substitutions under the same conditions. ".repeat(
+        14,
+      )
+    const lines = text.match(/.{1,78}(?:\s|$)/g)!.join("\n")
+    const hits: string[] = []
+    route((url) => {
+      hits.push(url)
+      if (url.includes("www.ebi.ac.uk"))
+        return new Response(JSON.stringify({ resultList: { result: [] } }), {
+          headers: { "content-type": "application/json" },
+        })
+      if (url.includes("example.com"))
+        return new Response(`<html><body><h1>Landing page</h1><p>${text}</p></body></html>`, {
+          headers: { "content-type": "text/html" },
+        })
+      return new Response(new Blob([tinyPDF(["1 Introduction", lines]) as BlobPart]), {
+        headers: { "content-type": "application/pdf" },
+      })
+    })
+    await Instance.provide({
+      directory: dir,
+      fn: async () => {
+        const session = await executionSession()
+        const workspace = await SessionFilesystem.workspace(session.id)
+        const output = path.join(workspace, "design")
+        const source = "10.1000/design.pdf"
+        await Bun.write(
+          path.join(output, "evidence_pack.json"),
+          JSON.stringify({
+            papers: [
+              {
+                title: "Design paper",
+                doi: source,
+                fulltext_urls: ["https://example.com/landing", "https://example.org/body.pdf"],
+              },
+            ],
+          }),
+        )
+        const result = await (
+          await LiteratureTool.init()
+        ).execute({ action: "read", run: output, source }, ctx(session.id))
+        expect(result.metadata.status).toBe("full")
+        expect(result.output).toContain("[block 0 · 1 Introduction · p.2]")
+        expect(hits).toHaveLength(3)
+        const pack = await Bun.file(path.join(output, "evidence_pack.json")).json()
+        expect(pack.papers[0].full_text.url).toBe("https://example.org/body.pdf")
+        expect(pack.papers[0].full_text.attempts[0].error).toContain("landing page is insufficient")
+      },
+    })
+  })
+
   test("a local PDF is extracted once and served from the cache afterwards", async () => {
     if (!(await Literature.extractor())) return
     const pdf = path.join(dir, "two-pages.pdf")

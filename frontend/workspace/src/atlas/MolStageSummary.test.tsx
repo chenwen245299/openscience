@@ -90,8 +90,8 @@ describe("molecular stage summaries", () => {
     expect(output.querySelector(".molpipe__item-detail")?.textContent).toContain("Topic matches: NIR-II")
     expect(host.textContent).toContain("Lower ranked paper")
     expect(host.textContent).toContain("Below the top 4")
-    expect(host.querySelector(".molpipe__handoff")?.textContent).toContain("4 papers · 1 extracted findings")
-    expect(host.textContent).toContain("await full-text verification")
+    expect(host.querySelector(".molpipe__handoff")?.textContent).toContain("4 papers · 0 design takeaways")
+    expect(host.textContent).toContain("No body-reviewed design takeaways")
   })
 
   test("does not invent excluded paper reasons for older runs or render unsafe paper links", () => {
@@ -261,7 +261,7 @@ describe("molecular stage summaries", () => {
     expect(cards[1].textContent).not.toContain("hypoxia")
   })
 
-  test("switches from papers to findings with actual values, context, source links and verification status", () => {
+  test("keeps legacy numerical evidence with its paper instead of presenting it as design guidance", () => {
     const host = mount("step1", {
       artifact: "evidence",
       found: 5,
@@ -294,7 +294,10 @@ describe("molecular stage summaries", () => {
     expect(papers.hidden).toBe(true)
     expect(findings.hidden).toBe(false)
     expect(controls[1].getAttribute("aria-pressed")).toBe("true")
-    const rows = findings.querySelectorAll(".molpipe__finding")
+    expect(findings.querySelectorAll(".molpipe__finding")).toHaveLength(0)
+    expect(findings.textContent).toContain("No body-reviewed design takeaways")
+    expect(controls).toHaveLength(2)
+    const rows = papers.querySelectorAll(".molpipe__finding")
     expect(rows).toHaveLength(2)
     expect(rows[0].querySelector(".molpipe__finding-value")?.textContent).toBe("14.8%")
     expect(rows[0].querySelector("blockquote")?.textContent).toContain("nanoparticle quantum yield")
@@ -303,11 +306,15 @@ describe("molecular stage summaries", () => {
     expect(rows[0].textContent).toContain("Needs verification")
     expect(rows[1].querySelector(".molpipe__finding-value")?.textContent).toBe("0 ns")
     expect(rows[1].textContent).toContain("Verified in run")
-    expect(output.textContent).toContain("Papers and findings are not used automatically")
+    expect(output.textContent).toContain("Papers and findings were not used automatically in this older run")
     controls[0].click()
     expect(papers.hidden).toBe(false)
     expect(findings.hidden).toBe(true)
     expect(papers.querySelectorAll(".molpipe__paper")).toHaveLength(2)
+    const evidence = papers.querySelector<HTMLDetailsElement>("[data-paper-evidence]")!
+    expect(evidence.open).toBe(false)
+    evidence.open = true
+    expect(evidence.textContent).toContain("14.8%")
   })
 
   test("does not invent absent finding values, units or ambiguous source papers", () => {
@@ -342,6 +349,163 @@ describe("molecular stage summaries", () => {
     })
     expect(host.querySelector(".molpipe__inputs")?.textContent).toContain("Design goal · 2 seed structures")
     expect(host.textContent).toContain("literature findings are not applied automatically")
+  })
+
+  test("shows design takeaways with rationale, next actions and supporting paper/body links, with numbers in paper evidence", () => {
+    const host = mount("step1", {
+      artifact: "evidence",
+      found: 1,
+      unique: 1,
+      selected: 1,
+      papers: [
+        {
+          title: "Structure study",
+          doi: "10.1/body",
+          year: 2025,
+          full_text: { status: "retrieved", reviewed: true, url: "https://example.org/body" },
+        },
+      ],
+      review: { status: "complete", papers_read: ["10.1/body"], gaps: ["Solvent dependence needs checking"] },
+      findings: [
+        {
+          id: "F01",
+          kind: "design_rule",
+          quantity: "design_guidance",
+          verified: true,
+          review_status: "agent_reviewed",
+          source: "10.1/body",
+          section: "Results, page 4",
+          statement: "Prioritize the supported donor/acceptor family for comparison.",
+          category: "principle",
+          rationale: "The body compares the donor/acceptor family with the control.",
+          direction: "prefer",
+          scope: "molecular",
+          motifs: ["triphenylamine"],
+          conditions: "Structural preference; aggregate measurements do not transfer to isolated molecules.",
+          next_step_use: "Search this donor substructure and prioritize matching candidates.",
+          context: "Actual saved body evidence.",
+        },
+      ],
+      observations: [
+        { quantity: "plqy", value: "5.8", verified: false, source: "10.1/body", context: "An abstract number lead." },
+      ],
+    })
+    const findings = host.querySelector<HTMLElement>('[data-section="findings"]')!
+    const buttons = host.querySelectorAll<HTMLButtonElement>(".molpipe__evidence-nav button")
+    expect(buttons).toHaveLength(2)
+    expect(host.querySelector('[data-section="observations"]')).toBeNull()
+    expect([...buttons].some((button) => button.textContent?.includes("Values"))).toBe(false)
+    buttons[1].click()
+    expect(findings.hidden).toBe(false)
+    expect(findings.textContent).toContain("Body reviewed")
+    expect(findings.textContent).toContain("Design principle")
+    expect(findings.textContent).toContain("Why: The body compares")
+    expect(findings.textContent).toContain("For the next step: Search this donor substructure")
+    expect(findings.textContent).toContain("aggregate measurements do not transfer")
+    expect(findings.textContent).toContain("Results, page 4")
+    expect(findings.textContent).not.toContain("5.8%")
+    expect(findings.querySelector<HTMLAnchorElement>(".molpipe__finding-source a")?.href).toBe(
+      "https://doi.org/10.1/body",
+    )
+    expect(findings.textContent).toContain("Supporting paper: Structure study")
+    expect(findings.querySelector<HTMLAnchorElement>(".molpipe__item-detail a")?.href).toBe("https://example.org/body")
+    expect(findings.textContent).toContain("2025 · 10.1/body")
+    buttons[0].click()
+    const evidence = host.querySelector<HTMLDetailsElement>(".molpipe__paper [data-paper-evidence]")!
+    expect(evidence.open).toBe(false)
+    evidence.open = true
+    expect(evidence.textContent).toContain("5.8%")
+    expect(host.textContent).toContain("Body reviewed by the agent")
+  })
+
+  test("does not count unreviewed body excerpts as findings while the agent is still summarizing", () => {
+    const host = mount("step1", {
+      artifact: "evidence",
+      found: 1,
+      unique: 1,
+      selected: 1,
+      papers: [{ title: "Body pending review" }],
+      review: { status: "pending" },
+      findings: [
+        {
+          kind: "design_rule",
+          quantity: "structure_property",
+          verified: false,
+          review_status: "needs_review",
+          statement: "Review this passage for a preference.",
+          context: "An automatically selected excerpt.",
+        },
+      ],
+    })
+    expect(host.textContent).toContain("1 papers · 0 design takeaways")
+    expect(host.querySelector('[data-section="findings"]')?.textContent).toContain(
+      "Reading paper bodies and summarizing",
+    )
+    expect(host.textContent).not.toContain("Review this passage")
+  })
+
+  test("retains verifiable supporting citations for precaution/technique guidance in both downstream steps", () => {
+    for (const artifact of ["retrieved", "designed"] as const) {
+      const host = mount(artifact === "retrieved" ? "step2" : "step3", {
+        artifact,
+        molecules: [],
+        literature_input: {
+          finding_ids: [],
+          guidance: [
+            {
+              id: "F02",
+              kind: "design_rule",
+              quantity: "design_guidance",
+              review_status: "agent_reviewed",
+              verified: true,
+              category: "precaution",
+              direction: "consider",
+              source: "10.1/conditions",
+              statement: "Keep the state-specific comparison conditions when planning the next experiment.",
+              rationale: "The paper reports a formulation-specific effect.",
+              conditions: "Matched aggregation conditions.",
+              next_step_use: "Compare proposed modifications under matched conditions.",
+              section: "Results · page 5",
+              context: "A supporting passage saved from the body.",
+              paper: {
+                title: "Condition study",
+                doi: "10.1/conditions",
+                url: "https://example.org/paper",
+                full_text: { status: "retrieved", url: "https://example.org/fulltext" },
+              },
+            },
+          ],
+        },
+      })
+      const guidance = host.querySelector<HTMLDetailsElement>("[data-design-guidance]")!
+      guidance.open = true
+      expect(guidance.textContent).toContain("Precaution")
+      expect(guidance.textContent).toContain("For the next step: Compare proposed modifications")
+      expect(guidance.querySelector<HTMLAnchorElement>(".molpipe__finding-source a")?.href).toBe(
+        "https://example.org/paper",
+      )
+      expect(guidance.querySelector("blockquote")?.textContent).toContain("supporting passage")
+      expect(guidance.querySelector<HTMLAnchorElement>(".molpipe__item-detail a")?.href).toBe(
+        "https://example.org/fulltext",
+      )
+    }
+  })
+
+  test("shows the actual reviewed finding IDs and derived substructure queries used by database retrieval", () => {
+    const host = mount("step2", {
+      artifact: "retrieved",
+      molecules: [],
+      literature_input: {
+        review_status: "complete",
+        papers_read: ["10.1/body", "10.1/other"],
+        finding_ids: ["F01"],
+        queries: [{ scaffold: "triphenylamine", finding_id: "F01", source: "10.1/body" }],
+        policy: "Soft preference; hard checks remain mandatory.",
+      },
+    })
+    expect(host.textContent).toContain("2 paper bodies reviewed · 1 structural preferences used")
+    expect(host.textContent).toContain("F01 → triphenylamine substructure search")
+    expect(host.textContent).not.toContain("literature findings are not applied automatically")
   })
 
   test("shows each Step 2 molecule's retrieval, diversity and exact passed and unmet checks", () => {

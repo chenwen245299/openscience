@@ -19,7 +19,7 @@ export function mergePipelineSnapshot(
       snapshot.run.stages.find((stage) => stage.started)?.started
   const artifacts = Object.fromEntries(
     snapshot.run.stages
-      .filter((stage) => stage.status === "ok")
+      .filter((stage) => stage.status === "ok" || stage.status === "awaiting_review")
       .flatMap((stage) => {
         const artifact = snapshot.artifacts[stage.key] ?? (same ? previous?.artifacts[stage.key] : undefined)
         return artifact ? [[stage.key, artifact]] : []

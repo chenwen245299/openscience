@@ -31,6 +31,7 @@ import sys
 import time
 
 from _common import ARTIFACTS, artifact_path, have_rdkit, read_artifact, utcnow, validate_output_dir
+import literature_evidence
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -108,13 +109,13 @@ class Stage:
             report()
             return False
 
-        self.status = "ok"
+        self.status = "awaiting_review" if self.key == "step1" and read_artifact(output_dir, "evidence").get("review", {}).get("status") != "complete" else "ok"
         print(f"  done in {self.elapsed:.1f}s -> {ARTIFACTS[self.produces]}")
-        report()
+        report("awaiting_review" if self.status == "awaiting_review" else "running")
         return True
 
 
-def publish(output_dir: str, question: str, mode: str, stages: list[Stage], outcome: str) -> None:
+def publish(output_dir: str, question: str, mode: str, stages: list[Stage], outcome: str, options: dict | None = None) -> None:
     """
     Write the live progress file for this run.
 
@@ -134,6 +135,7 @@ def publish(output_dir: str, question: str, mode: str, stages: list[Stage], outc
         "outcome": outcome,
         "updated": utcnow(),
         "stages": [stage.state() for stage in stages],
+        "options": options or {},
     }
     try:
         with open(os.path.join(output_dir, PROGRESS), "w", encoding="utf-8") as handle:
@@ -150,7 +152,7 @@ def build(args, output_dir: str) -> list[Stage]:
     if args.aqueous:
         goal_args.append("--aqueous")
 
-    step1_args = ["--output-dir", output_dir, "--per-source", str(args.per_source), "--keep", str(args.papers)]
+    step1_args = ["--output-dir", output_dir, "--per-source", str(args.per_source), "--keep", str(args.papers), "--full-texts", str(args.full_texts)]
     if args.mailto:
         step1_args += ["--mailto", args.mailto]
 
@@ -166,6 +168,9 @@ def build(args, output_dir: str) -> list[Stage]:
     ]
     if "step2" not in MODES[args.mode]:
         step3_args.append("--no-parents")
+    if args.mode in ("design", "generate-only"):
+        step2_args.append("--no-literature")
+        step3_args.append("--no-literature")
 
     all_stages = {
         "goal": Stage("goal", "Step 0 — GoalSpec", "goalspec.py", goal_args, "goal"),
@@ -209,7 +214,7 @@ def final_summary(output_dir: str) -> None:
             for gap in payload.get("unresolved", []):
                 print(f"  unresolved: {gap}")
         elif kind == "evidence":
-            print(f"\n{label}: {payload['selected']} papers, {len(payload['findings'])} extracted numbers (unverified)")
+            print(f"\n{label}: {payload['selected']} papers, {len(payload['findings'])} design guidance records; body review {payload.get('review', {}).get('status', 'not saved')}")
             for paper in payload["papers"][:3]:
                 print(f"  [{paper.get('year') or 'n.d.'}] {paper['title'][:84]}")
         else:
@@ -233,7 +238,7 @@ def main() -> int:
     )
     parser.add_argument("--question", required=True, help="The design question, Chinese or English")
     parser.add_argument("--output-dir", default="./molagent_results")
-    parser.add_argument("--mode", choices=sorted(MODES), default="full")
+    parser.add_argument("--mode", choices=sorted(MODES))
     parser.add_argument("--skip", help="Comma-separated stages to skip: goal,step1,step2,step3")
 
     parser.add_argument("--modalities", help="Override: FLI,PAI,PDT,PTT")
@@ -243,6 +248,8 @@ def main() -> int:
 
     parser.add_argument("--per-source", type=int, default=10, help="Step 1: results per source per query")
     parser.add_argument("--papers", type=int, default=20, help="Step 1: papers kept")
+    parser.add_argument("--full-texts", type=int, default=6, help="Step 1: priority paper bodies to retrieve")
+    parser.add_argument("--review-from", help="Resume this run after the agent reads bodies and writes a literature review JSON")
     parser.add_argument("--mailto", help="Step 1: contact email for the OpenAlex polite pool")
     parser.add_argument("--seeds", help="Step 2: comma-separated seed SMILES")
     parser.add_argument("--per-query", type=int, default=60, help="Step 2: PubChem records per query")
@@ -253,7 +260,37 @@ def main() -> int:
     args = parser.parse_args()
 
     output_dir = validate_output_dir(args.output_dir)
+    previous = {}
+    saved_progress = os.path.join(output_dir, PROGRESS)
+    if args.review_from and os.path.isfile(saved_progress):
+        with open(saved_progress, encoding="utf-8") as handle:
+            previous = json.load(handle)
+        # A body-review handoff must not silently lose seed structures or
+        # candidate limits when the agent resumes with the shorter command.
+        excluded = {"help", "question", "output_dir", "mode", "review_from"}
+        allowed = set(vars(args)) - excluded
+        parser.set_defaults(**{key: value for key, value in previous.get("options", {}).items() if key in allowed})
+        args = parser.parse_args()
+    if args.review_from and args.mode and previous.get("mode") and args.mode != previous["mode"]:
+        parser.error("--review-from resumes the original run mode; start a separate run to change modes")
+    args.mode = args.mode or previous.get("mode") or "full"
     stages = build(args, output_dir)
+    if args.review_from:
+        from _common import write_artifact
+
+        goal = read_artifact(output_dir, "goal")
+        if goal["question"] != args.question:
+            parser.error("--review-from must resume the same design question and output directory")
+        with open(args.review_from, encoding="utf-8") as handle:
+            review = json.load(handle)
+        pack = literature_evidence.apply_review(read_artifact(output_dir, "evidence"), review, output_dir)
+        write_artifact(output_dir, "evidence", pack)
+        for stage in stages:
+            if stage.key in ("goal", "step1"):
+                stage.status = "ok"
+                saved = next((item for item in previous.get("stages", []) if item["key"] == stage.key), {})
+                stage.started = saved.get("started")
+                stage.elapsed = saved.get("seconds", 0.0)
 
     print(f"Question: {args.question}")
     print(f"Mode: {args.mode} — {len(stages)} stage(s) into {output_dir}")
@@ -262,11 +299,23 @@ def main() -> int:
 
         print(f"Ranking: {predictor.describe()}")
 
-    report = lambda outcome="running": publish(output_dir, args.question, args.mode, stages, outcome)
+    options = {key: value for key, value in vars(args).items() if key not in ("question", "output_dir", "mode", "review_from")}
+    report = lambda outcome="running": publish(output_dir, args.question, args.mode, stages, outcome, options)
     report()
 
     started = time.time()
     for stage in stages:
+        if stage.status == "ok":
+            continue
+        if stage.key == "step2" and args.mode in ("full", "retrieve"):
+            pack = read_artifact(output_dir, "evidence")
+            if pack.get("review", {}).get("status") != "complete":
+                for previous in stages:
+                    if previous.key == "step1":
+                        previous.status = "awaiting_review"
+                report("awaiting_review")
+                print("\nAGENT NEXT STEP: read the priority paper bodies in literature/*.json, including the methods/results and limitations. Write a review JSON with body quotes, structural motifs/functional groups, conditions and how each finding should guide retrieval/filtering. Then resume this same pipeline with --review-from review.json. This is automatic agent research work, NOT a request for the user's approval.")
+                return 0
         if not stage.run(output_dir, report):
             summary = summarise(output_dir, stages)
             summary["outcome"] = "failed"
@@ -275,6 +324,10 @@ def main() -> int:
             report("failed")
             print(f"\nPipeline stopped at {stage.title}. Partial artifacts are in {output_dir}.")
             return 1
+        if stage.status == "awaiting_review":
+            report("awaiting_review")
+            print("\nAGENT NEXT STEP: body evidence is saved. Read the closest useful bodies and synthesize structural guidance using the skill's review contract, then continue this same run with --review-from. Do not ask the user to approve literature reading or stop at this intermediate result.")
+            return 0
 
     summary = summarise(output_dir, stages)
     summary["outcome"] = "ok"

@@ -9,8 +9,29 @@ import { Storage } from "../../src/storage/storage"
 import { Identifier } from "../../src/id/id"
 import { SessionFilesystem } from "../../src/session/filesystem"
 import { tmpdir, trustProject } from "../fixture/fixture"
+import { shellParser, shellSources } from "../../src/permission/shell-source"
+import { BundledSkills } from "../../src/skill/bundled"
+import { Global } from "../../src/global"
+import { Filesystem } from "../../src/util/filesystem"
 
 beforeEach(() => PermissionJudge.reset())
+
+test("managed scientific interpreters do not masquerade as credential reads", () => {
+  const root = "/Users/example/.config/openscience/data-root"
+  const python = path.join(root, "conda/envs/python/bin/python")
+  const veto = (command: string) => PermissionJudge.veto(command, root)
+  for (const command of [
+    `${python} -c "import json; print(json.load(open('results.json')))"`,
+    `cd results && "${python}" -c "print(1)"`,
+    `${python} pipeline.py --output-dir results`,
+  ])
+    expect(veto(command)).toBeUndefined()
+  expect(veto(`${python} -c "open('/tmp/.config/openscience/auth.json').read()"`)).toBe("credential material")
+  expect(veto(`cat ${python}`)).toBe("credential material")
+  expect(veto(`${python}/../auth.json`)).toBe("credential material")
+  expect(veto(`${python} -c "print(API_KEY)"`)).toBe("credential material")
+  expect(veto(`${python} -c "print(1)" && sudo reboot`)).toBe("privilege escalation")
+})
 
 test("parses only the two risk values and fails closed on malformed verdicts", () => {
   expect(PermissionJudge.settle(PermissionJudge.parse('{"risk":"无风险"}'))).toBe("allow")
@@ -71,6 +92,91 @@ test("complete script inspection follows project imports and rejects symlink esc
   await Bun.write(path.join(tmp.path, "fetch.py"), 'API_KEY = "private-value"')
   expect(PermissionJudge.inspect(input)).rejects.toThrow("credential material")
   expect(PermissionJudge.veto("rm -rf results")).toBeUndefined()
+})
+
+test("inspects the executed Python after cd, including quoted paths and subshell boundaries", async () => {
+  await using tmp = await tmpdir()
+  const run = path.join(tmp.path, "design run")
+  await Bun.write(path.join(run, "build review.py"), "import helper\nprint(helper.value)\n")
+  await Bun.write(path.join(run, "helper.py"), "value = 42\n")
+  await Bun.write(path.join(tmp.path, "original.py"), "print('original directory')\n")
+  const parser = await shellParser()
+  const input = { roots: [tmp.path], cwd: tmp.path, command: 'cd "design run" && python3 "build review.py"' }
+  await expect(PermissionJudge.inspect({ ...input, files: ["build review.py"] })).rejects.toThrow("cannot be inspected")
+  const files = await shellSources(parser.parse(input.command)!.rootNode, tmp.path)
+  expect(files).toEqual([path.join(run, "build review.py")])
+  expect(await PermissionJudge.inspect({ ...input, files })).toContain("value = 42")
+  const compound = '(cd "design run" && python3 "build review.py"); python3 original.py'
+  expect(await shellSources(parser.parse(compound)!.rootNode, tmp.path)).toEqual([
+    path.join(run, "build review.py"),
+    path.join(tmp.path, "original.py"),
+  ])
+  expect(await shellSources(parser.parse('cd "design run" || python3 original.py')!.rootNode, tmp.path)).toEqual([
+    path.join(tmp.path, "original.py"),
+  ])
+  await expect(shellSources(parser.parse('cd "$TARGET" && python3 original.py')!.rootNode, tmp.path)).rejects.toThrow(
+    "cannot be resolved",
+  )
+  await expect(PermissionJudge.inspect({ ...input, inspectionError: "unresolved cwd" })).rejects.toThrow(
+    "unresolved cwd",
+  )
+  await expect(shellSources(parser.parse('python3 "${SCRIPT}.py"')!.rootNode, tmp.path)).rejects.toThrow(
+    "cannot be resolved",
+  )
+  expect(
+    PermissionJudge.subject("bash", { shell: { ...input, inspectionError: "unresolved cwd" } })?.inspectionError,
+  ).toBe("unresolved cwd")
+})
+
+test("inspects statically imported bundled skill code without widening project authority", async () => {
+  await using tmp = await tmpdir()
+  const root = await BundledSkills.root()
+  expect(root).toBeDefined()
+  await Bun.write(
+    path.join(tmp.path, "review.py"),
+    `import sys\nSKILL = "${root}/chemistry/molagent-workflow/scripts"\nsys.path.insert(0, SKILL)\nimport scaffolds\nprint(len(scaffolds.LIBRARY))\n`,
+  )
+  const input = { roots: [tmp.path], cwd: tmp.path, command: "python3 review.py", files: ["review.py"] }
+  const inspected = JSON.parse(await PermissionJudge.inspect(input)) as {
+    project: string[]
+    readonlyCode: string[]
+    scripts: { path: string }[]
+  }
+  expect(inspected.project).toEqual([tmp.path])
+  expect(inspected.readonlyCode).toEqual([root!])
+  expect(inspected.scripts.some((script) => script.path.endsWith("/scaffolds.py"))).toBe(true)
+  await using outside = await tmpdir()
+  await Bun.write(path.join(outside.path, "helper.py"), "value = 1")
+  await Bun.write(
+    path.join(tmp.path, "review.py"),
+    `import sys\nsys.path.insert(0, '${outside.path}')\nimport helper\n`,
+  )
+  await expect(PermissionJudge.inspect(input)).rejects.toThrow("outside the project")
+})
+
+test("saved scripts may import an older bundle only when its source exactly matches the current app", async () => {
+  await using tmp = await tmpdir()
+  const root = await BundledSkills.root()
+  const folder = path.join(Global.Path.cache, "bundled-skills", "a".repeat(64), "chemistry/molagent-workflow/scripts")
+  const legacy = path.join(folder, "scaffolds.py")
+  await Bun.write(legacy, await Bun.file(path.join(root!, "chemistry/molagent-workflow/scripts/scaffolds.py")).bytes())
+  await Bun.write(
+    path.join(tmp.path, "review.py"),
+    `import sys\nSKILL = "${folder}"\nsys.path.insert(0, SKILL)\nimport scaffolds\nprint(len(scaffolds.SCAFFOLDS))\n`,
+  )
+  const input = { roots: [tmp.path], cwd: tmp.path, command: "python3 review.py", files: ["review.py"] }
+  const inspected = JSON.parse(await PermissionJudge.inspect(input)) as {
+    project: string[]
+    readonlyCode: string[]
+    scripts: { path: string }[]
+  }
+  expect(inspected.project).toEqual([tmp.path])
+  const canonical = await Filesystem.canonical(legacy)
+  expect(canonical).toBeDefined()
+  expect(inspected.readonlyCode).toEqual([canonical!])
+  expect(inspected.scripts.some((script) => script.path === canonical)).toBe(true)
+  await Bun.write(legacy, "print('modified external code')\n")
+  await expect(PermissionJudge.inspect(input)).rejects.toThrow("differs from bundled source")
 })
 
 function response(text: string) {
@@ -160,11 +266,13 @@ describe("independent model request", () => {
         })
         const workspace = await SessionFilesystem.workspace(session.id)
         await Bun.write(
-          path.join(workspace, "fetch.py"),
+          path.join(workspace, "run", "fetch.py"),
           'import urllib.request\nprint(urllib.request.urlopen("https://api.openalex.org/works").status)\n',
         )
         const baseline = await Session.messages({ sessionID: session.id })
-        const metadata = { shell: { command: "python fetch.py", cwd: workspace, files: ["fetch.py"] } }
+        const command = "cd run && python3 fetch.py"
+        const files = await shellSources((await shellParser()).parse(command)!.rootNode, workspace)
+        const metadata = { shell: { command, cwd: workspace, files } }
         const request = {
           sessionID: session.id,
           patterns: ["python fetch.py"],
@@ -187,7 +295,7 @@ describe("independent model request", () => {
         expect(await Storage.list(["permission"])).toEqual([])
 
         // A changed source or a new invocation cannot inherit a previous allow.
-        await Bun.write(path.join(workspace, "fetch.py"), 'print("changed source")\n')
+        await Bun.write(path.join(workspace, "run", "fetch.py"), 'print("changed source")\n')
         answer.text = '{"risk":"有风险"}'
         const id = Identifier.ascending("permission")
         const pending = PermissionNext.ask({ ...request, id, permission: "bash" }).catch((error: unknown) => error)

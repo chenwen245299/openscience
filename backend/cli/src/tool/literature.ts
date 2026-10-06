@@ -6,6 +6,7 @@ import { SessionFilesystem } from "@/session/filesystem"
 import { Tool } from "./tool"
 import { WebFetchTool } from "./webfetch"
 import DESCRIPTION from "./literature.txt"
+import { readLiteratureRun } from "./literature-body"
 
 const PAGE_SEPARATOR = "\f"
 const ABSTRACT_ONLY_CHARS_PER_PAGE = 300
@@ -124,8 +125,29 @@ export const LiteratureTool = Tool.define("literature", {
       .optional()
       .describe("search: connector ids instead of openalex + arxiv (e.g. pubmed, europepmc, biorxiv)."),
     pages: z.string().optional().describe('read: page range, e.g. "3-5".'),
+    run: z
+      .string()
+      .trim()
+      .min(1)
+      .optional()
+      .describe(
+        "read: molecular run directory containing evidence_pack.json. With source, retrieves and saves addressed full-text evidence automatically.",
+      ),
+    source: z
+      .string()
+      .trim()
+      .min(1)
+      .optional()
+      .describe(
+        "read with run: retained paper DOI, arXiv id or exact title from evidence_pack.json; no API URL or download script needed.",
+      ),
   }),
   async execute(params, ctx) {
+    if (params.run || params.source) {
+      if (params.action !== "read" || !params.run || !params.source)
+        throw new Error("run and source must be supplied together with action read")
+      return readLiteratureRun({ ...params, run: params.run, source: params.source }, ctx)
+    }
     if (params.action === "search") {
       if (!params.query) throw new Error("search needs a query")
       const result = await Literature.search(params.query, {

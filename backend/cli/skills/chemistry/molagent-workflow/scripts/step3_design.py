@@ -31,6 +31,7 @@ import os
 import sys
 
 import photophysics
+import literature_preferences
 import predictor
 import scaffolds
 from _common import log_provenance, read_artifact, require_rdkit, validate_output_dir, write_artifact
@@ -379,7 +380,7 @@ def generate_reinvent(goal: dict, parents: list[dict], limit: int) -> list[dict]
 # ---------------------------------------------------------------------------
 
 
-def evaluate(designed: list[dict], goal: dict, parents_by_smiles: dict[str, dict]) -> list[dict]:
+def evaluate(designed: list[dict], goal: dict, parents_by_smiles: dict[str, dict], evidence: dict | None = None) -> list[dict]:
     seen: set[str] = set(parents_by_smiles)
     out: list[dict] = []
     for candidate in designed:
@@ -398,8 +399,14 @@ def evaluate(designed: list[dict], goal: dict, parents_by_smiles: dict[str, dict
         if prediction:
             candidate["ml"] = prediction
         blended = predictor.blend(proxy, prediction, goal)
-        candidate["score"] = blended["score"]
+        preference, details = literature_preferences.score(smiles, profile, evidence)
+        candidate["score"] = round(max(0, blended["score"] + preference), 4)
+        blended["base_score"] = blended["score"]
+        blended["score"] = candidate["score"]
         blended["components"] = photophysics.rank_terms(profile, goal)
+        if details:
+            candidate["literature_matches"] = details
+            blended["components"]["literature_preference"] = preference
         candidate["ranking"] = blended
         candidate["synthesizability"] = synthesizability(mol)
         candidate["properties"] = {
@@ -428,6 +435,8 @@ def select(candidates: list[dict], keep: int, max_sa: float) -> list[dict]:
     for rank, candidate in enumerate(selected, 1):
         sa = candidate["synthesizability"]
         details = [f"Score rank #{rank} of {len(pool)} in the eligible pool; shortlist limit {keep}"]
+        for match in candidate.get("literature_matches", []):
+            details.append(f"Literature {match['finding_id']} ({match['source']}): {match['statement']}; {match['direction']} {', '.join(match['matched']) or 'no matching feature'}; {match['effect']}; unmatched: {', '.join(match['missing']) or 'none'}; scope: {match['conditions']}")
         if sa.get("available"):
             details.append(f"Synthetic accessibility estimate {sa['sa_score']:.2f}; requested maximum {max_sa:.2f}")
         else:
@@ -448,7 +457,7 @@ def select(candidates: list[dict], keep: int, max_sa: float) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def run(goal: dict, parents: list[dict], engine: str, limit: int, keep: int, max_sa: float, output_dir: str) -> dict:
+def run(goal: dict, parents: list[dict], engine: str, limit: int, keep: int, max_sa: float, output_dir: str, evidence: dict | None = None) -> dict:
     engine_used = engine
     notes: list[str] = []
 
@@ -471,7 +480,7 @@ def run(goal: dict, parents: list[dict], engine: str, limit: int, keep: int, max
           f"({', '.join(moves_for(goal))})")
 
     parents_by_smiles = {p["smiles"]: p for p in parents}
-    candidates = evaluate(assembled + edited, goal, parents_by_smiles)
+    candidates = evaluate(assembled + edited, goal, parents_by_smiles, evidence)
     print(f"Evaluated:       {len(candidates)} unique, valid structures")
 
     chosen = select(candidates, keep, max_sa)
@@ -485,6 +494,7 @@ def run(goal: dict, parents: list[dict], engine: str, limit: int, keep: int, max
         "engine": engine_used,
         "engine_notes": notes,
         "moves": moves_for(goal),
+        "literature_input": literature_preferences.inputs(evidence, []),
         "generated": len(candidates),
         "passed_gate": passing,
         "molecules": chosen,
@@ -509,6 +519,7 @@ def main() -> int:
     parser.add_argument("--max-sa", type=float, default=6.0, help="Reject designs above this SAscore")
     parser.add_argument("--parents", type=int, default=8, help="How many retrieved molecules to edit")
     parser.add_argument("--no-parents", action="store_true", help="Generate only; skip targeted edits")
+    parser.add_argument("--no-literature", action="store_true", help="Explicitly generate without literature preferences")
     args = parser.parse_args()
 
     output_dir = validate_output_dir(args.output_dir)
@@ -522,7 +533,8 @@ def main() -> int:
         except FileNotFoundError:
             print("  no MoleculeSet from step 2; generating without targeted edits", file=sys.stderr)
 
-    result = run(goal, parents, args.engine, args.limit, args.keep, args.max_sa, output_dir)
+    evidence = None if args.no_literature else literature_preferences.load(output_dir, goal, required=False)
+    result = run(goal, parents, args.engine, args.limit, args.keep, args.max_sa, output_dir, evidence)
     target = write_artifact(output_dir, "designed", result)
 
     print(f"\nMoleculeSet (designed) written to {target}")

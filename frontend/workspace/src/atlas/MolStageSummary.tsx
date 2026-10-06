@@ -209,7 +209,7 @@ function DecisionReason(props: {
   )
 }
 
-function PaperRow(props: { paper: Paper; kept: boolean; concepts?: string[]; index: number }) {
+function PaperRow(props: { paper: Paper; kept: boolean; concepts?: string[]; index: number; evidence?: Finding[] }) {
   const url = () => link(props.paper.url) ?? (props.paper.doi ? link(`https://doi.org/${props.paper.doi}`) : undefined)
   const summary = createMemo(() => paperSummary(props.paper))
   const sources = () => [...new Set(props.paper.found_by ?? (props.paper.source ? [props.paper.source] : []))]
@@ -249,40 +249,154 @@ function PaperRow(props: { paper: Paper; kept: boolean; concepts?: string[]; ind
       >
         <DecisionReason label="Why kept" reason={summary().reason} topics={summary().topics} details={details()} />
       </Show>
+      <Show when={props.paper.full_text}>
+        <p class="molpipe__finding-note">
+          {props.paper.full_text?.reviewed
+            ? "Body reviewed by the agent"
+            : props.paper.full_text?.status === "retrieved"
+              ? "Body saved · agent review pending"
+              : props.paper.full_text?.status === "unavailable"
+                ? "Body unavailable · abstract only"
+                : "Body not read in this priority batch"}
+        </p>
+      </Show>
+      <PaperEvidence items={props.evidence ?? []} papers={[props.paper]} />
     </li>
+  )
+}
+
+function PaperEvidence(props: { items: Finding[]; papers: Paper[] }) {
+  return (
+    <Show when={props.items.length}>
+      <details class="molpipe__paper-evidence" data-paper-evidence>
+        <summary>
+          Supporting evidence · {props.items.length}
+          <span class="molpipe__disclosure-chevron" aria-hidden="true">
+            ›
+          </span>
+        </summary>
+        <p class="molpipe__finding-note">
+          Saved paper data. Abstract excerpts still need checking against the body and its conditions.
+        </p>
+        <ul class="molpipe__findings">
+          <For each={props.items}>{(finding) => <FindingRow finding={finding} papers={props.papers} />}</For>
+        </ul>
+      </details>
+    </Show>
   )
 }
 
 function FindingRow(props: { finding: Finding; papers: Paper[] }) {
   const paper = () => findingPaper(props.finding, props.papers)
   const url = () => link(paper()?.url) ?? (paper()?.doi ? link(`https://doi.org/${paper()!.doi}`) : undefined)
+  const body = () => link(paper()?.full_text?.url)
   return (
-    <li class="molpipe__finding">
+    <li class="molpipe__finding" data-kind={props.finding.kind}>
       <div class="molpipe__finding-head">
         <span class="molpipe__finding-label">{props.finding.label ?? props.finding.quantity.replaceAll("_", " ")}</span>
         <span class="molpipe__finding-badge" data-verified={props.finding.verified}>
-          {props.finding.verified ? "Verified in run" : "Needs verification"}
+          {props.finding.review_status === "agent_reviewed"
+            ? "Body reviewed"
+            : props.finding.review_status === "needs_review"
+              ? "Agent review pending"
+              : props.finding.verified
+                ? "Verified in run"
+                : "Needs verification"}
         </span>
       </div>
-      <div class="molpipe__finding-value">{findingValue(props.finding)}</div>
-      <Show when={props.finding.context}>
-        <blockquote>{props.finding.context}</blockquote>
-      </Show>
+      <div class="molpipe__finding-value">{props.finding.statement ?? findingValue(props.finding)}</div>
       <div class="molpipe__finding-source">
-        <span>Source: </span>
+        <span>{props.finding.kind === "design_rule" ? "Supporting paper: " : "Source: "}</span>
         <Show when={url()} fallback={<span>{paper()?.title ?? props.finding.source ?? "Source not saved"}</span>}>
           <a href={url()} target="_blank" rel="noopener noreferrer">
             {paper()?.title}
           </a>
         </Show>
       </div>
+      <Show when={props.finding.kind === "design_rule" && (paper()?.doi || paper()?.year)}>
+        <p class="molpipe__finding-note">{[paper()?.year, paper()?.doi].filter(Boolean).join(" · ")}</p>
+      </Show>
+      <Show when={props.finding.kind === "design_rule"}>
+        <Show when={props.finding.direction}>
+          <div class="molpipe__topics">
+            <Show when={props.finding.category}>
+              <span>
+                {
+                  { principle: "Design principle", precaution: "Precaution", technique: "Design technique" }[
+                    props.finding.category!
+                  ]
+                }
+              </span>
+            </Show>
+            <span>
+              {props.finding.id} ·{" "}
+              {props.finding.direction === "prefer"
+                ? "Prefer"
+                : props.finding.direction === "avoid"
+                  ? "Deprioritize"
+                  : "Design note"}
+            </span>
+            <For each={[...(props.finding.motifs ?? []), ...(props.finding.features ?? [])]}>
+              {(motif) => <span>{motif.replaceAll("_", " ")}</span>}
+            </For>
+          </div>
+        </Show>
+        <Show when={props.finding.rationale}>
+          <p class="molpipe__finding-use">
+            <strong>Why: </strong>
+            {props.finding.rationale}
+          </p>
+        </Show>
+        <Show when={props.finding.next_step_use}>
+          <p class="molpipe__finding-use">
+            <strong>For the next step: </strong>
+            {props.finding.next_step_use}
+          </p>
+        </Show>
+        <Show when={props.finding.conditions}>
+          <p class="molpipe__finding-note">
+            <strong>Conditions & caveats: </strong>
+            {props.finding.conditions}
+          </p>
+        </Show>
+        <Show when={props.finding.context}>
+          <details class="molpipe__item-detail">
+            <summary>
+              Supporting evidence · {props.finding.section ?? "Saved passage"}
+              <span aria-hidden="true">›</span>
+            </summary>
+            <blockquote>{props.finding.context}</blockquote>
+            <Show when={body()}>
+              <a href={body()} target="_blank" rel="noopener noreferrer">
+                Open paper body ↗
+              </a>
+            </Show>
+          </details>
+        </Show>
+      </Show>
+      <Show when={props.finding.context && props.finding.kind !== "design_rule"}>
+        <blockquote>{props.finding.context}</blockquote>
+      </Show>
     </li>
   )
 }
 
 function LiteratureOutput(props: { pack: Extract<Artifact, { artifact: "evidence" }>; concepts?: string[] }) {
   const [state, setState] = createStore({ section: "papers" as "papers" | "findings" })
-  const findings = () => props.pack.findings ?? []
+  const findings = createMemo(() =>
+    (props.pack.findings ?? []).filter(
+      (finding) =>
+        finding.kind === "design_rule" &&
+        finding.review_status === "agent_reviewed" &&
+        finding.statement?.trim() &&
+        finding.next_step_use?.trim(),
+    ),
+  )
+  const observations = createMemo(() => [
+    ...(props.pack.observations ?? []),
+    ...(props.pack.findings ?? []).filter((finding) => finding.kind !== "design_rule"),
+  ])
+  const unlinked = () => observations().filter((finding) => !findingPaper(finding, props.pack.papers))
   return (
     <details class="molpipe__handoff" data-output="evidence">
       <summary>
@@ -293,7 +407,7 @@ function LiteratureOutput(props: { pack: Extract<Artifact, { artifact: "evidence
           </span>
         </span>
         <p>
-          {props.pack.selected} papers · {findings().length} extracted findings
+          {props.pack.selected} papers · {findings().length} design takeaways
         </p>
       </summary>
       <div class="molpipe__output-body molpipe__literature-body">
@@ -313,29 +427,71 @@ function LiteratureOutput(props: { pack: Extract<Artifact, { artifact: "evidence
           <div class="molpipe__label">Kept for review · {props.pack.papers.length}</div>
           <ul class="molpipe__items molpipe__papers">
             <For each={props.pack.papers}>
-              {(paper, index) => <PaperRow paper={paper} index={index() + 1} kept concepts={props.concepts} />}
+              {(paper, index) => (
+                <PaperRow
+                  paper={paper}
+                  index={index() + 1}
+                  kept
+                  concepts={props.concepts}
+                  evidence={observations().filter((finding) => findingPaper(finding, props.pack.papers) === paper)}
+                />
+              )}
             </For>
           </ul>
+          <Show when={unlinked().length}>
+            <p class="molpipe__finding-note">These saved excerpts could not be linked to one retained paper.</p>
+            <PaperEvidence items={unlinked()} papers={[]} />
+          </Show>
         </div>
         <div class="molpipe__evidence-panel" data-section="findings" hidden={state.section !== "findings"}>
-          <Show when={findings().length} fallback={<p class="molpipe__line">No findings were saved in this run.</p>}>
+          <Show
+            when={findings().length}
+            fallback={
+              <p class="molpipe__line">
+                {props.pack.review && props.pack.review.status !== "complete"
+                  ? "Reading paper bodies and summarizing design principles, precautions and techniques for the next steps."
+                  : "No body-reviewed design takeaways were saved in this run."}
+              </p>
+            }
+          >
             <p class="molpipe__finding-note">
-              Values extracted from abstracts. Review the quoted context before treating them as measured results.
+              Design principles, precautions and techniques from the literature, with reasons and concrete actions for
+              retrieval, filtering or molecular modification.
             </p>
             <ul class="molpipe__findings">
               <For each={findings()}>{(finding) => <FindingRow finding={finding} papers={props.pack.papers} />}</For>
             </ul>
           </Show>
-          <Show when={findings().some((finding) => !finding.verified)}>
-            <p class="molpipe__finding-note">Abstract findings await full-text verification.</p>
-          </Show>
+          <For each={props.pack.review?.gaps}>{(gap) => <p class="molpipe__finding-note">Evidence gap: {gap}</p>}</For>
         </div>
       </div>
       <p class="molpipe__handoff-note">
-        <strong>Step 2 input: </strong>Design goal + supplied seed structures. Papers and findings are not used
-        automatically.
+        <strong>Step 2 input: </strong>
+        {props.pack.review?.status === "complete"
+          ? "Design goal + reviewed design takeaways + supplied seed structures. The takeaways guide retrieval, selection and subsequent modification."
+          : props.pack.review
+            ? "The agent is reading important paper bodies and preparing structural guidance before database selection."
+            : "Design goal + supplied seed structures. Papers and findings were not used automatically in this older run."}
       </p>
     </details>
+  )
+}
+
+function DesignGuidance(props: { findings?: Finding[] }) {
+  return (
+    <Show when={props.findings?.length}>
+      <details class="molpipe__paper-evidence" data-design-guidance>
+        <summary>
+          Design guidance · {props.findings?.length}
+          <span class="molpipe__disclosure-chevron" aria-hidden="true">
+            ›
+          </span>
+        </summary>
+        <ul class="molpipe__findings">
+          <For each={props.findings}>{(finding) => <FindingRow finding={finding} papers={[]} />}</For>
+        </ul>
+      </details>
+    </Show>
   )
 }
 
@@ -488,10 +644,33 @@ export function MolStageSummary(props: {
                     ? ` · ${set().routes!.structure_first!.length} seed structures`
                     : ""}
                 </p>
-                <p class="molpipe__finding-note">
-                  Database selection follows the design goal and any supplied seeds; literature findings are not applied
-                  automatically.
-                </p>
+                <Show
+                  when={set().literature_input}
+                  fallback={
+                    <p class="molpipe__finding-note">
+                      Database selection follows the design goal and any supplied seeds; literature findings are not
+                      applied automatically.
+                    </p>
+                  }
+                >
+                  <p class="molpipe__finding-note">
+                    {set().literature_input?.papers_read?.length ?? 0} paper bodies reviewed ·{" "}
+                    {set().literature_input?.finding_ids?.length ?? 0} structural preferences used
+                  </p>
+                  <For each={set().literature_input?.queries}>
+                    {(query) => (
+                      <p class="molpipe__line">
+                        {query.finding_id} → {query.scaffold.replaceAll("_", " ")} substructure search
+                      </p>
+                    )}
+                  </For>
+                  <details class="molpipe__item-detail">
+                    <summary>
+                      How literature was used<span aria-hidden="true">›</span>
+                    </summary>
+                    <p>{set().literature_input?.policy}</p>
+                  </details>
+                </Show>
               </div>
               <div class="molpipe__tool-row">
                 <Brand name="rdkit" />
@@ -499,6 +678,12 @@ export function MolStageSummary(props: {
               </div>
             </Show>
             <Show when={set().artifact === "designed"}>
+              <Show when={set().literature_input?.finding_ids?.length}>
+                <p class="molpipe__finding-note">
+                  {set().literature_input?.finding_ids?.join(", ")} · reviewed literature preferences included in design
+                  ranking
+                </p>
+              </Show>
               <div class="molpipe__tool-row">
                 <Show when={set().engine}>{(engine) => <Brand name={engine()} />}</Show>
                 <span>
@@ -513,6 +698,7 @@ export function MolStageSummary(props: {
                 <p class="molpipe__note">{set().engine_notes?.join(" ")}</p>
               </Show>
             </Show>
+            <DesignGuidance findings={set().literature_input?.guidance} />
             <p class="molpipe__line">
               {set().generated ?? set().retrieved ?? 0} {set().artifact === "designed" ? "generated" : "retrieved"}
               {set().passed_gate !== undefined ? ` · ${set().passed_gate} pass checks` : ""}

@@ -174,7 +174,7 @@ function SessionPipeline(props: { owner: Owner; request: Transport; listen: Watc
   createEffect(() => {
     if (!ready()) return
     const dirs = Object.values(history.state.runs)
-      .filter((run) => run.run.outcome === "running")
+      .filter((run) => run.run.outcome === "running" || run.run.outcome === "awaiting_review")
       .map((run) => run.dir)
     if (!dirs.length) return
     const timer = setInterval(() => {

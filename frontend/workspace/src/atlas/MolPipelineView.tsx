@@ -28,7 +28,13 @@ export function MolPipelineView(props: {
         </div>
         <div class="molpipe__meta">
           <span data-outcome={run().outcome}>
-            {run().outcome === "running" ? "Running" : run().outcome === "ok" ? "Complete" : "Failed"}
+            {run().outcome === "running"
+              ? "Running"
+              : run().outcome === "awaiting_review"
+                ? "Reviewing literature"
+                : run().outcome === "ok"
+                  ? "Complete"
+                  : "Failed"}
           </span>
           <span>
             {done()}/{run().stages.length} stages
@@ -58,6 +64,7 @@ export function MolPipelineView(props: {
                         {
                           pending: "Pending",
                           running: "Running",
+                          awaiting_review: "Reviewing body",
                           ok: "Done",
                           failed: "Failed",
                           no_artifact: "Missing results",

@@ -527,14 +527,16 @@
   align-items: center;
   justify-content: center;
   flex: 1;
-  gap: 7px;
+  gap: 4px;
   min-width: 0;
-  padding: 6px 8px;
+  padding: 6px 4px;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
   color: var(--color-text-muted);
   font: inherit;
+  font-size: var(--font-size-x-small);
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -587,6 +589,25 @@
   gap: 6px;
 }
 
+.molpipe__paper-evidence {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 45%, transparent);
+}
+
+.molpipe__paper-evidence > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.molpipe__paper-evidence > summary::-webkit-details-marker {
+  display: none;
+}
+
 .molpipe__finding-label {
   font-weight: var(--font-weight-medium);
 }
@@ -609,6 +630,18 @@
   font-variant-numeric: tabular-nums;
 }
 
+.molpipe__finding[data-kind="design_rule"] .molpipe__finding-value {
+  font-size: 14px;
+  line-height: 1.55;
+  font-weight: 600;
+}
+
+.molpipe__finding-use {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 10px 0;
+}
+
 .molpipe__finding blockquote {
   margin: 8px 0;
   padding-left: 9px;
@@ -616,6 +649,7 @@
 }
 
 .molpipe__finding-source {
+  margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid color-mix(in srgb, var(--color-border) 45%, transparent);
 }

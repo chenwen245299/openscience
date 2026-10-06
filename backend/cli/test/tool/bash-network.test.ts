@@ -4,9 +4,15 @@ import { Instance } from "../../src/project/instance"
 import { executionSession, tmpdir } from "../fixture/fixture"
 import type { PermissionNext } from "../../src/permission/next"
 import { Sandbox } from "../../src/sandbox/sandbox"
+import { ProjectAccess } from "../../src/project/access"
+import { SessionFilesystem } from "../../src/session/filesystem"
 
 async function harness() {
   const session = await executionSession()
+  await ProjectAccess.update(Instance.project, {
+    mode: "approve",
+    root: (await ProjectAccess.status(Instance.project)).root,
+  })
   const requests: Array<Omit<PermissionNext.Request, "id" | "sessionID" | "tool">> = []
   return {
     requests,
@@ -52,7 +58,11 @@ describe("tool.bash network escalation", () => {
         expect(String((network?.metadata.network as { commands: string[] }).commands[0])).toContain(
           "curl -sS -m http://127.0.0.1:9/health".replace(" -m ", " -m "),
         )
-        expect(network?.metadata.shell).toEqual({ command: "curl -sS -m 2 http://127.0.0.1:9/health" })
+        expect(network?.metadata.shell).toEqual({
+          command: "curl -sS -m 2 http://127.0.0.1:9/health",
+          cwd: await SessionFilesystem.workspace(ctx.sessionID),
+          files: [],
+        })
       },
     })
   })

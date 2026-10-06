@@ -3,7 +3,7 @@ name: molagent-workflow
 description: End-to-end design workflow for theranostic luminogens — molecules whose excited state is split between fluorescence imaging, photodynamic therapy and photothermal therapy. Chains literature retrieval, chromophore database retrieval and filtering, and generation plus targeted modification into one reproducible run with versioned artifacts. Supplies the photophysical layer the drug-discovery skills lack — conjugation and push-pull descriptors, intersystem-crossing routes, Type I versus Type II leaning, channel balance, and a band proxy calibrated against reference dyes. Use for phototheranostics, photosensitizer design, NIR-I/NIR-II fluorophores, AIE luminogens, photothermal and photoacoustic agents, and any request that names fluorescence imaging, PDT, PTT, singlet oxygen, ROS generation or an emission window.
 summary: Design theranostic luminogens from literature through chromophore retrieval to generation, with photophysical scoring.
 category: chemistry
-allowed-tools: Read Bash Write Edit Glob Grep
+allowed-tools: Read Bash Write Edit Glob Grep Literature
 license: MIT
 metadata:
     skill-author: Synthetic Sciences
@@ -82,8 +82,11 @@ installer puts it in `~/.local/bin`, which many login shells never add to
 `PATH`. The scripts check that path, `/opt/homebrew/bin` and `/usr/local/bin`
 themselves and name what they found in the error.
 
-One question runs all four stages in roughly two minutes and writes every
-artifact. Common variations:
+The full pipeline retrieves literature first, then returns control to the
+research agent for body reading and synthesis. This is internal research work,
+not a user approval boundary. Continue autonomously with the same run directory
+after writing the review described below; do not stop at the first script exit
+or ask the user whether to read the papers. Common variations:
 
 | Intent | Flags |
 |---|---|
@@ -98,8 +101,8 @@ artifact. Common variations:
 ```
 question
   -> GoalSpec                goalspec.py           modalities, window, ROS route, constraints
-  -> EvidencePack            step1_literature.py   papers + extracted numbers, all unverified
-  -> MoleculeSet retrieved   step2_database.py     real chromophores, gated and ranked
+  -> EvidencePack            step1_literature.py   papers + saved bodies + agent-reviewed structural guidance
+  -> MoleculeSet retrieved   step2_database.py     evidence-guided queries, structural gates and soft preferences
   -> MoleculeSet designed    step3_design.py       assembled and edited proposals
 ```
 
@@ -121,29 +124,132 @@ exists.
 
 ### Step 1 — Literature (`step1_literature.py`)
 
-Searches OpenAlex, Europe PMC and arXiv with queries built from the GoalSpec,
-deduplicates on DOI then normalised title, ranks on concept coverage with
-mild citation and recency terms, and pulls candidate numbers out of abstracts
-with regexes.
+Searches OpenAlex, Europe PMC and arXiv, deduplicates and ranks on saved
+metadata, then retrieves the top six open article bodies by default
+(`--full-texts` changes the reading batch). It tries Europe PMC body XML,
+arXiv HTML/PDF and known open-access PDF locations. Each paper records whether
+its body was retrieved, unavailable or outside the batch. An abstract or a
+publisher landing page never counts as a body read.
 
-**Every extracted number is marked `verified: false` and it means it.** A
-regex over an abstract is a lead. Before any of it becomes a design target,
-read the paper with the `literature` tool. The pack's `to_verify` list names
-exactly which quantities need that. Window definitions ("NIR-II, 1000–1700
-nm") are filtered out so they cannot be mistaken for measured peaks.
+**Required agent continuation before Step 2:**
+
+1. Read the saved `literature/*.json` bodies for the most relevant papers,
+   including design rationale, structures, results, controls, conditions and
+   limitations. Read at least the three closest usable bodies when available.
+   For missing bodies or PDFs requiring a better reader, call the fixed
+   `literature` interface directly:
+   `{"action":"read","run":"<run>","source":"<DOI or arxiv_id from evidence_pack.json>"}`.
+   It resolves the public full-text locations, extracts and saves the complete
+   addressed body, and updates the paper's `full_text` record automatically.
+   Add `query` for relevant passages/sections or `pages` for PDF page ranges;
+   it reuses the saved body and returns stable block indices. For a supplied
+   local PDF, add `ref` with its file path to the same call. Do not search for
+   API documentation, write downloader scripts, or manually reconstruct the
+   body JSON. An unavailable result is explicit, not a reason to retry custom
+   endpoints; continue with available important papers or a supplied PDF.
+   Retrieval does not mark the body reviewed or generate Findings. Never
+   substitute an abstract or invent a structure from a compound name.
+2. Synthesize **design takeaways**, not a list of measurements or extracted
+   sentences. Each Finding is a design principle, precaution or technique
+   learned by reading the literature: what to choose/change/avoid, why the
+   evidence supports it, when it applies, and a concrete action for Step 2
+   retrieval/filtering or Step 3 molecular modification. Cover relevant
+   scaffold families, donor/acceptor units, bridges, shielding, functional
+   handles, channel trade-offs and pitfalls only where the bodies support
+   them. Explain disagreements and evidence gaps. Do not force every useful
+   precaution or technique into the script's small motif vocabulary; keep
+   non-automatable takeaways as `consider` and describe how the agent should
+   use them. A standalone wavelength, quantum yield or performance record is
+   supporting evidence, never a Finding by itself.
+3. Write `literature_review.json` using the contract below, citing a retained
+   paper and a literal quote in one saved body block. Prefer/avoid preferences
+   use only supported molecular motifs/features; formulation effects and
+   measurement/formulation precautions remain actionable `consider` notes;
+   their numbers stay in supporting evidence. Explain unsupported structure
+   families as notes rather than force them into a different known motif.
+4. Resume `pipeline.py --question "<same question>" --output-dir <same run>
+   --review-from <run>/literature_review.json`. The importer validates the
+   source, passage and feature vocabulary before Step 2 starts. A malformed
+   review is corrected by the agent without asking the user for approval.
+   The saved mode, seed structures and candidate/design limits are retained;
+   explicit flags on the resume command can override those saved limits.
+   Every Finding displays its supporting paper title/link, available DOI/year,
+   literal body excerpt and section/page. The importer takes citation metadata
+   from the validated retained paper and saved body, not from an invented
+   citation in the review. These citations travel with the takeaway into
+   Steps 2 and 3 so the user can verify the design advice there as well.
+
+Review contract (the text fields contain your interpretation of the actual
+body, not placeholders):
+
+```json
+{
+  "goal_question": "exact GoalSpec question",
+  "papers_read": ["retained DOI, arXiv id, or full title"],
+  "findings": [{
+    "source": "same retained source identifier",
+    "block": 12,
+    "context": "literal supporting quote from blocks[12].text",
+    "label": "concise structural design point",
+    "category": "principle",
+    "statement": "a concrete design recommendation learned from the body",
+    "rationale": "why this action is supported, including mechanism and trade-offs where established",
+    "direction": "prefer",
+    "scope": "molecular",
+    "motifs": ["exact name from scaffolds.SCAFFOLDS"],
+    "features": [],
+    "conditions": "state, formulation, excitation, relevant controls and limits",
+    "next_step_use": "specific retrieval/filtering or molecular-modification action for the next steps"
+  }],
+  "gaps": ["missing evidence or unresolved conflict"]
+}
+```
+
+Directions are `prefer`, `avoid`, `consider`; scopes are `molecular`,
+`formulation`, `measurement`. Categories are `principle`, `precaution`,
+`technique`; each new takeaway includes its `rationale`. Supported features are `donor_acceptor`,
+`ionic_handle`, `peg_handle`, `heavy_atom`. Exact motif names and structures
+come from `scaffolds.SCAFFOLDS`. An unfamiliar scaffold is a `consider` note
+until a validated search structure is supplied explicitly through seeds.
+A review with no actionable preferences must still cite a body actually read
+and explain the gap. Full-text unavailability remains visible; use a supplied
+paper or another relevant source, and do not claim body evidence where none
+is available.
+
+Candidate numbers extracted from abstracts are saved as paper-level
+supporting evidence in `observations`, all `verified: false`, and can be
+expanded inside the corresponding paper card. There is no Values section.
+Body excerpts selected mechanically are `reading_leads`, not Findings;
+Findings stay empty until the agent has interpreted the bodies. Window
+definitions are filtered out so they cannot be mistaken for measured peaks.
 
 ### Step 2 — Database retrieval (`step2_database.py`)
 
 Two routes into one pool, as in the framework:
 
-- **criteria-first** — scaffolds chosen from the GoalSpec drive PubChem
-  substructure searches
+- **criteria-first** — reviewed, preferred molecular motifs drive PubChem
+  substructure searches before the GoalSpec scaffold families
 - **structure-first** — `--seeds` SMILES drive similarity searches
 
 Then standardise (largest fragment, charge normalisation that leaves
 structural cations alone, InChIKey deduplication), evaluate against
 `photophysics.gate`, and rank with Tanimoto thinning at 0.6 so the top of the
 list is not twenty substitutions of one scaffold.
+
+The script reads the completed EvidencePack and carries **all** reviewed
+design takeaways into `literature_input.guidance`, including precautions and
+techniques that cannot be applied by the ranking code. The agent uses their
+actions and conditions when choosing structures, interpreting the shortlist
+and planning the next modification round. The script separately records the
+finding IDs used for queries and per-molecule matching. Reviewed `prefer`/`avoid` rules add a
+bounded soft ranking term (at most ±0.10); they do not override hard checks.
+Missing a preferred motif is not a universal exclusion rule. Formulation and
+measurement notes stay available to the agent but do not filter isolated
+structures. All motifs/features listed in one rule must match together for
+its ranking contribution; express supported alternatives as separate rules.
+Step 3 applies the same preference term so parent/design scores
+remain comparable. `--no-literature` is only for an explicitly requested
+literature-free run, never a way around the required research continuation.
 
 The gate is what earns its keep: on a NIR-II query it typically rejects about
 nine in ten retrieved molecules, with a reason attached to each rejection.

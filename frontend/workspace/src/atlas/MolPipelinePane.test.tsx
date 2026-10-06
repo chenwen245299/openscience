@@ -55,7 +55,7 @@ const progress = (
     {
       key: "step1",
       title: "Literature",
-      status: outcome === "running" ? "running" : "ok",
+      status: outcome === "running" ? "running" : outcome === "awaiting_review" ? "awaiting_review" : "ok",
       seconds: 20,
       started: "2026-10-06T01:00:01Z",
       produces: "evidence_pack.json",
@@ -172,6 +172,21 @@ async function settle(check: () => boolean) {
 }
 
 describe("saved molecular design runs", () => {
+  test("keeps the literature output visible during agent body review and after resume", async () => {
+    const files = await fixture()
+    const dir = await files.write(`${files.sessions.ses_one}/run`, progress("Body review", "awaiting_review"))
+    const view = mount(files)
+    await settle(() => view.host.textContent?.includes("Body review paper") ?? false)
+    expect(view.host.textContent).toContain("Reviewing literature")
+    expect(view.host.textContent).toContain("Reviewing body")
+    const output = view.host.querySelector<HTMLDetailsElement>('[data-output="evidence"]')!
+    output.open = true
+    await files.write(dir, progress("Body review", "ok", "2026-10-06T02:20:00Z"))
+    files.emit(`${dir}/progress.json`)
+    await settle(() => view.host.textContent?.includes("Complete") ?? false)
+    expect(view.host.querySelector('[data-output="evidence"]')).toBe(output)
+    expect(output.open).toBe(true)
+  })
   test("keeps completed steps, papers and reasons after completion, panel close and an offline reopening", async () => {
     const files = await fixture()
     const dir = await files.write(`${files.sessions.ses_one}/run`, progress("Hypoxia", "running"))

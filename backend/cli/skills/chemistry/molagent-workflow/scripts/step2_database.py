@@ -28,6 +28,7 @@ import time
 import photophysics
 import predictor
 import scaffolds
+import literature_preferences
 from _common import (
     FetchError,
     http_json,
@@ -99,7 +100,7 @@ def pubchem_properties(cids: list[int]) -> list[dict]:
     return out
 
 
-def retrieve(goal: dict, seeds: list[str], per_query: int, output_dir: str) -> tuple[list[dict], list[dict]]:
+def retrieve(goal: dict, seeds: list[str], per_query: int, output_dir: str, evidence: dict | None = None) -> tuple[list[dict], list[dict]]:
     """Run both routes and return (molecules, attempts)."""
     pool: list[dict] = []
     attempts: list[dict] = []
@@ -125,7 +126,7 @@ def retrieve(goal: dict, seeds: list[str], per_query: int, output_dir: str) -> t
         for seed in seeds:
             attempt("structure-first", seed[:28], lambda s=seed: pubchem_cids(s, "similarity", per_query))
 
-    chosen = scaffolds.select(goal, roles=["core", "acceptor"])
+    chosen = literature_preferences.queries(goal, evidence)
     for entry in chosen:
         attempt(
             "criteria-first",
@@ -197,7 +198,7 @@ def _structural_charge(mol) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def evaluate(molecules: list[dict], goal: dict) -> list[dict]:
+def evaluate(molecules: list[dict], goal: dict, evidence: dict | None = None) -> list[dict]:
     """Rules gate; the optional model only reorders what the rules admit."""
     use_model = predictor.available()
     for molecule in molecules:
@@ -209,8 +210,14 @@ def evaluate(molecules: list[dict], goal: dict) -> list[dict]:
         if prediction:
             molecule["ml"] = prediction
         blended = predictor.blend(proxy, prediction, goal)
-        molecule["score"] = blended["score"]
+        preference, details = literature_preferences.score(molecule["smiles"], profile, evidence)
+        molecule["score"] = round(max(0, blended["score"] + preference), 4)
+        blended["base_score"] = blended["score"]
+        blended["score"] = molecule["score"]
         blended["components"] = photophysics.rank_terms(profile, goal)
+        if details:
+            molecule["literature_matches"] = details
+            blended["components"]["literature_preference"] = preference
         molecule["ranking"] = blended
     return molecules
 
@@ -235,6 +242,8 @@ def diversify(molecules: list[dict], keep: int) -> list[dict]:
             continue
         fingerprint = generator.GetFingerprint(mol)
         details = [f"Score rank #{rank} of {len(ordered)} before diversity filtering; shortlist limit {keep}"]
+        for match in molecule.get("literature_matches", []):
+            details.append(f"Literature {match['finding_id']} ({match['source']}): {match['statement']}; {match['direction']} {', '.join(match['matched']) or 'no matching feature'}; {match['effect']}; unmatched: {', '.join(match['missing']) or 'none'}; scope: {match['conditions']}")
         if fingerprints:
             similarity = max(DataStructs.BulkTanimotoSimilarity(fingerprint, fingerprints))
             if similarity > 0.6:
@@ -261,9 +270,9 @@ def diversify(molecules: list[dict], keep: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def run(goal: dict, seeds: list[str], per_query: int, keep: int, output_dir: str) -> dict:
+def run(goal: dict, seeds: list[str], per_query: int, keep: int, output_dir: str, evidence: dict | None = None) -> dict:
     print("Retrieving:")
-    pool, attempts = retrieve(goal, seeds, per_query, output_dir)
+    pool, attempts = retrieve(goal, seeds, per_query, output_dir, evidence)
     if not pool:
         raise RuntimeError(
             "No molecules retrieved. Every PubChem call failed or returned nothing — check network access, "
@@ -274,7 +283,7 @@ def run(goal: dict, seeds: list[str], per_query: int, keep: int, output_dir: str
     print(f"Standardised: {len(pool)} -> {len(clean)} unique ({rejected['duplicate']} duplicates, "
           f"{rejected['unparsable']} unparsable, {rejected['no_carbon']} inorganic)")
 
-    evaluate(clean, goal)
+    evaluate(clean, goal, evidence)
     passing = [m for m in clean if m["gate"]["pass"]]
     print(f"Gated: {len(passing)}/{len(clean)} pass the photophysical prerequisites")
 
@@ -283,7 +292,8 @@ def run(goal: dict, seeds: list[str], per_query: int, keep: int, output_dir: str
 
     return {
         "goal_question": goal["question"],
-        "routes": {"structure_first": seeds, "criteria_first": [s["name"] for s in scaffolds.select(goal, roles=["core", "acceptor"])]},
+        "routes": {"structure_first": seeds, "criteria_first": [s["name"] for s in literature_preferences.queries(goal, evidence)]},
+        "literature_input": literature_preferences.inputs(evidence, literature_preferences.queries(goal, evidence)),
         "attempts": attempts,
         "retrieved": len(pool),
         "unique": len(clean),
@@ -304,13 +314,15 @@ def main() -> int:
     parser.add_argument("--seeds", help="Comma-separated seed SMILES for the structure-first route")
     parser.add_argument("--per-query", type=int, default=60, help="Max PubChem records per query")
     parser.add_argument("--keep", type=int, default=30, help="Molecules kept in the MoleculeSet")
+    parser.add_argument("--no-literature", action="store_true", help="Explicitly run without literature guidance")
     args = parser.parse_args()
 
     output_dir = validate_output_dir(args.output_dir)
     goal = read_artifact(output_dir, "goal")
     seeds = [s.strip() for s in (args.seeds or "").split(",") if s.strip()]
 
-    result = run(goal, seeds, args.per_query, args.keep, output_dir)
+    evidence = None if args.no_literature else literature_preferences.load(output_dir, goal)
+    result = run(goal, seeds, args.per_query, args.keep, output_dir, evidence)
     target = write_artifact(output_dir, "retrieved", result)
 
     print(f"\nMoleculeSet written to {target}")

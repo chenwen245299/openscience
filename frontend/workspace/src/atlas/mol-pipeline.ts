@@ -1,7 +1,7 @@
 export type StageState = {
   key: string
   title: string
-  status: "pending" | "running" | "ok" | "failed" | "no_artifact" | "skipped_no_rdkit"
+  status: "pending" | "running" | "awaiting_review" | "ok" | "failed" | "no_artifact" | "skipped_no_rdkit"
   seconds: number
   started: string | null
   produces: string
@@ -11,7 +11,7 @@ export type Progress = {
   question: string
   mode: string
   output_dir: string
-  outcome: "running" | "ok" | "failed"
+  outcome: "running" | "awaiting_review" | "ok" | "failed"
   updated: string
   stages: StageState[]
 }
@@ -56,6 +56,7 @@ export type Paper = SearchHit & {
   citations?: number
   selection_reason?: string
   selection_details?: string[]
+  full_text?: { status: string; path?: string; url?: string; reviewed?: boolean; reason?: string }
 }
 
 export type Finding = {
@@ -66,6 +67,29 @@ export type Finding = {
   context?: string
   source?: string
   verified: boolean
+  id?: string
+  kind?: string
+  statement?: string
+  review_status?: "needs_review" | "agent_reviewed"
+  section?: string
+  direction?: "prefer" | "avoid" | "consider"
+  scope?: string
+  motifs?: string[]
+  features?: string[]
+  conditions?: string
+  next_step_use?: string
+  category?: "principle" | "precaution" | "technique"
+  rationale?: string
+  paper?: Paper
+}
+
+export type LiteratureInput = {
+  review_status?: string
+  papers_read?: string[]
+  finding_ids?: string[]
+  guidance?: Finding[]
+  queries?: { scaffold: string; finding_id: string; source: string }[]
+  policy?: string
 }
 
 export type Molecule = {
@@ -112,11 +136,14 @@ export type Artifact =
       papers: Paper[]
       excluded_papers?: Paper[]
       findings?: Finding[]
+      observations?: Finding[]
+      review?: { status: string; papers_read?: string[]; gaps?: string[] }
     }
   | {
       artifact: "retrieved" | "designed"
       attempts?: Attempt[]
       routes?: { structure_first?: string[]; criteria_first?: string[] }
+      literature_input?: LiteratureInput
       retrieved?: number
       unique?: number
       generated?: number
@@ -145,7 +172,7 @@ export function parseProgress(body: string): Progress | undefined {
     typeof value.mode !== "string" ||
     typeof value.output_dir !== "string" ||
     typeof value.updated !== "string" ||
-    !["running", "ok", "failed"].includes(value.outcome ?? "") ||
+    !["running", "awaiting_review", "ok", "failed"].includes(value.outcome ?? "") ||
     !Array.isArray(value.stages) ||
     !value.stages.length ||
     !value.stages.every(
@@ -156,7 +183,9 @@ export function parseProgress(body: string): Progress | undefined {
         typeof stage.produces === "string" &&
         typeof stage.seconds === "number" &&
         (stage.started === null || typeof stage.started === "string") &&
-        ["pending", "running", "ok", "failed", "no_artifact", "skipped_no_rdkit"].includes(stage.status),
+        ["pending", "running", "awaiting_review", "ok", "failed", "no_artifact", "skipped_no_rdkit"].includes(
+          stage.status,
+        ),
     )
   )
     return undefined

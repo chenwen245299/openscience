@@ -9,12 +9,10 @@ goalspec.py), search and select, extract and verify, compile references.
 What this script does and does not do:
 
   - It SEARCHES OpenAlex, Europe PMC and arXiv, deduplicates, and ranks.
-  - It EXTRACTS candidate design numbers from abstracts with regexes, and
-    labels every one of them `verified: false`.
-  - It does NOT verify anything. Verification means reading the paper, and
-    reading belongs to the agent through the `literature` tool. The
-    EvidencePack carries a `to_verify` list naming exactly which claims need
-    a read before they may be used as design targets.
+  - It retrieves important open paper bodies and saves addressed passages.
+  - The research agent reviews those passages into actionable structural
+    guidance. Step 2 consumes only completed reviews.
+  - Abstract number extractions remain separate, unverified observations.
 
 A number pulled from an abstract is a lead, not a fact.
 """
@@ -28,6 +26,7 @@ import sys
 import xml.etree.ElementTree as ET
 
 from _common import FetchError, http_json, http_text, log_provenance, read_artifact, validate_output_dir, write_artifact
+import literature_evidence
 
 OPENALEX = "https://api.openalex.org/works"
 EUROPEPMC = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
@@ -40,7 +39,7 @@ ARXIV = "http://export.arxiv.org/api/query"
 
 
 def search_openalex(query: str, limit: int, mailto: str | None) -> list[dict]:
-    params = {"search": query, "per-page": str(limit), "select": "id,doi,title,publication_year,cited_by_count,authorships,primary_location,abstract_inverted_index,open_access"}
+    params = {"search": query, "per-page": str(limit), "select": "id,doi,title,publication_year,cited_by_count,authorships,primary_location,best_oa_location,locations,abstract_inverted_index,open_access"}
     if mailto:
         params["mailto"] = mailto
     payload = http_json(OPENALEX, params=params, source="openalex")
@@ -60,6 +59,10 @@ def _from_openalex(work: dict) -> dict:
         "abstract": _deinvert(work.get("abstract_inverted_index")),
         "url": location.get("landing_page_url") or work.get("id"),
         "open_access": bool((work.get("open_access") or {}).get("is_oa")),
+        "fulltext_urls": list(dict.fromkeys(
+            location.get("pdf_url") for location in [work.get("best_oa_location") or {}, location, *(work.get("locations") or [])]
+            if location.get("pdf_url")
+        )),
         "source": "openalex",
     }
 
@@ -156,6 +159,7 @@ def deduplicate(papers: list[dict]) -> list[dict]:
         for field in ("doi", "pmid", "pmcid", "arxiv_id"):
             merged[field] = merged.get(field) or existing.get(field) or paper.get(field)
         merged["found_by"] = sorted({*_sources(existing), *_sources(paper)})
+        merged["fulltext_urls"] = list(dict.fromkeys([*existing.get("fulltext_urls", []), *paper.get("fulltext_urls", [])]))
         by_key[key] = merged
     return list(by_key.values())
 
@@ -287,7 +291,7 @@ def extract(paper: dict) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def run(goal: dict, output_dir: str, per_source: int, keep: int, mailto: str | None) -> dict:
+def run(goal: dict, output_dir: str, per_source: int, keep: int, mailto: str | None, full_texts: int = 6) -> dict:
     queries = goal["keywords"]["queries"]
     concepts = goal["keywords"]["concepts"]
 
@@ -340,12 +344,20 @@ def run(goal: dict, output_dir: str, per_source: int, keep: int, mailto: str | N
         for paper in unique[keep:]
     ]
 
-    findings: list[dict] = []
+    observations: list[dict] = []
     for paper in selected:
         for item in extract(paper):
-            findings.append(item)
+            observations.append(item)
 
-    to_verify = sorted({f["quantity"] for f in findings})
+    reading_leads: list[dict] = []
+    for index, paper in enumerate(selected):
+        if index >= full_texts:
+            paper["full_text"] = {"status": "not_requested", "reason": "Outside the current priority reading budget"}
+            continue
+        print(f"  Reading body {index + 1}/{min(full_texts, len(selected))}: {paper['title'][:80]}", flush=True)
+        paper["full_text"] = literature_evidence.read_paper(paper, output_dir)
+        reading_leads.extend(literature_evidence.discover(paper, output_dir))
+    to_verify = sorted({f["quantity"] for f in observations})
 
     return {
         "goal_question": goal["question"],
@@ -356,11 +368,14 @@ def run(goal: dict, output_dir: str, per_source: int, keep: int, mailto: str | N
         "selected": len(selected),
         "papers": selected,
         "excluded_papers": excluded,
-        "findings": findings,
+        "findings": [],
+        "reading_leads": reading_leads,
+        "observations": observations,
+        "review": {"status": "pending", "papers_read": [], "gaps": []},
         "to_verify": [
             f"Read the source and confirm `{q}` before using it as a design target" for q in to_verify
         ],
-        "caveat": "Findings are regex extractions from abstracts. None are verified; read the paper before citing.",
+        "caveat": "Full-text excerpts await agent interpretation. Abstract observations are unverified leads and do not guide molecular selection.",
     }
 
 
@@ -370,17 +385,29 @@ def main() -> int:
     parser.add_argument("--per-source", type=int, default=10, help="Results per source per query")
     parser.add_argument("--keep", type=int, default=20, help="Papers kept in the EvidencePack")
     parser.add_argument("--mailto", help="Contact email for the OpenAlex polite pool")
+    parser.add_argument("--full-texts", type=int, default=6, help="Priority papers whose open bodies are retrieved")
+    parser.add_argument("--review-from", help="Apply an agent review JSON to the existing EvidencePack without repeating retrieval")
     args = parser.parse_args()
 
     output_dir = validate_output_dir(args.output_dir)
     goal = read_artifact(output_dir, "goal")
 
-    pack = run(goal, output_dir, args.per_source, args.keep, args.mailto)
+    if args.review_from:
+        with open(args.review_from, encoding="utf-8") as handle:
+            review = json.load(handle)
+        pack = literature_evidence.apply_review(read_artifact(output_dir, "evidence"), review, output_dir)
+    else:
+        if args.full_texts < 1 or args.full_texts > 20:
+            parser.error("--full-texts must be between 1 and 20")
+        pack = run(goal, output_dir, args.per_source, args.keep, args.mailto, args.full_texts)
     target = write_artifact(output_dir, "evidence", pack)
 
     print(f"EvidencePack written to {target}")
     print(f"  {pack['found']} hits -> {pack['unique']} unique -> {pack['selected']} selected")
-    print(f"  {len(pack['findings'])} candidate numbers extracted from abstracts (none verified)")
+    print(f"  {len(pack['findings'])} structural guidance records; review {pack['review']['status']}")
+    print(f"  {len(pack.get('observations', []))} separate abstract observations (unverified)")
+    if pack["review"]["status"] != "complete":
+        print("NEXT: read the saved literature/*.json bodies, interpret relevant structure/property relationships, and write a review JSON. Resume pipeline.py with --review-from that file. This is an agent research task, not a user approval request.")
     failed = [a for a in pack["attempts"] if not a["ok"]]
     if failed:
         print(f"  {len(failed)} source call(s) failed; see attempts[] in the artifact")

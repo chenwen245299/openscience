@@ -51,7 +51,9 @@ export function findingPaper(finding: Finding, papers: Paper[]): Paper | undefin
   const matches = papers.filter((paper) =>
     [paper.doi, paper.arxiv_id, paper.title, paper.title.slice(0, 80)].includes(finding.source),
   )
-  return matches.length === 1 ? matches[0] : undefined
+  if (matches.length === 1) return matches[0]
+  const saved = finding.paper
+  return saved && [saved.doi, saved.arxiv_id, saved.title].includes(finding.source) ? saved : undefined
 }
 
 export function paperDetails(paper: Paper, concepts: string[] = []): string[] {
@@ -91,6 +93,7 @@ export function moleculeDetails(molecule: Molecule): string[] {
     spectral_band: "spectral band fit",
     conjugation: "conjugated path",
     unmet_preferences: "unmet preferences",
+    literature_preference: "reviewed literature preference",
   }
   return [
     ...(molecule.selection_details ?? []),
