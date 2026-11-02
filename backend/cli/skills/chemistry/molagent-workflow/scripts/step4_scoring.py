@@ -13,8 +13,9 @@ one scale so a known compound and a proposal compete fairly.
              once the lab has returned measurements, a Gaussian-process
              surrogate per objective with a posterior standard deviation
   validate   chemical validity, the GoalSpec gate, synthetic accessibility,
-             PAINS alerts, and applicability: how close the candidate is to
-             anything that has actually been measured
+             the property rules and structural alerts of `admet.py`, and
+             applicability: how close the candidate is to anything that has
+             actually been measured
   score      a weighted combination of the objectives, plus the Pareto front
              so a trade-off the weights hide is still visible
 
@@ -22,15 +23,15 @@ one scale so a known compound and a proposal compete fairly.
 the ceiling. Everything else stays in the ScoreCard with the reason it does
 not fit, because step 5 may still want to know what was ruled out.
 
-No ADMET model is bundled. The ScoreCard reports computed descriptors under
-`descriptors` and says so; it never presents them as predicted ADMET.
+The properties-and-ADMET box is `admet.py`: descriptors, advisory rule sets,
+an ESOL solubility estimate and alert catalogues, none of them a trained
+model and none of them hard. The ScoreCard says so under `models.admet`.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
-import warnings
 
 import assays
 import literature_preferences
@@ -40,13 +41,8 @@ import surrogate
 from _common import archive, log_provenance, read_artifact, require_rdkit, validate_output_dir, write_artifact
 
 Chem = require_rdkit()
-import step3_design  # noqa: E402  (shares evaluate and SAscore; needs RDKit first)
-
-with warnings.catch_warnings():
-    # Some RDKit builds register the FilterCatalog converters twice on import
-    # and say so on stderr; the catalog works either way.
-    warnings.filterwarnings("ignore", message="to-Python converter for .*FilterHierarchyMatcher")
-    from rdkit.Chem import FilterCatalog  # noqa: E402
+import admet  # noqa: E402  (needs RDKit first)
+import step3_design  # noqa: E402  (shares evaluate and SAscore)
 
 DEFAULT_WEIGHTS = {"fit": 0.5, "lab": 1.0, "feasibility": 0.3}
 # Below this similarity to every measured or reference compound, a candidate is
@@ -54,15 +50,6 @@ DEFAULT_WEIGHTS = {"fit": 0.5, "lab": 1.0, "feasibility": 0.3}
 # not a validated applicability boundary.
 DOMAIN_SIMILARITY = 0.35
 NEUTRAL_FEASIBILITY = 0.5
-
-
-def _pains():
-    params = FilterCatalog.FilterCatalogParams()
-    params.AddCatalog(FilterCatalog.FilterCatalogParams.FilterCatalogs.PAINS)
-    return FilterCatalog.FilterCatalog(params)
-
-
-PAINS = _pains()
 
 
 def parse_weights(text: str | None) -> dict[str, float]:
@@ -123,6 +110,14 @@ def fit_surrogates(dataset: dict, goal: dict) -> tuple[dict[str, surrogate.Surro
         if len(smiles) < surrogate.MIN_POINTS:
             report[assay] = {"n": len(smiles), "status": f"not fitted: needs {surrogate.MIN_POINTS} measured compounds"}
             continue
+        # A target with no spread standardises to all zeros, and the model
+        # that comes back would report a leave-one-out error of exactly zero
+        # while having learned nothing. It happens whenever an objective
+        # saturates -- every compound inside the emission window scores 1 --
+        # and reads as a perfect model if it is not caught here.
+        if max(values) == min(values):
+            report[assay] = {"n": len(smiles), "status": "not fitted: every measured compound has the same utility on this objective"}
+            continue
         model = surrogate.Surrogate(smiles, values)
         models[assay] = model
         report[assay] = {"status": "fitted", "best_z": round(model.best(), 4), **model.leave_one_out()}
@@ -170,7 +165,7 @@ def predict(candidates: list[dict], goal: dict, models: dict[str, surrogate.Surr
 # ---------------------------------------------------------------------------
 
 
-def validate(candidate: dict, max_sa: float, domain: float) -> None:
+def validate(candidate: dict, goal: dict, max_sa: float, domain: float) -> None:
     mol = Chem.MolFromSmiles(candidate["smiles"])
     checks = [{"rule": "validity", "pass": True, "severity": "hard", "detail": "RDKit parsed and sanitised the structure"}]
     checks += candidate["gate"]["checks"]
@@ -182,12 +177,14 @@ def validate(candidate: dict, max_sa: float, domain: float) -> None:
             "severity": "hard",
             "detail": f"SAscore {sa['sa_score']:.2f} against a ceiling of {max_sa:.2f}",
         })
+    assessment = admet.assess(mol, goal)
+    # Advisory by construction: they travel with the candidate and are listed
+    # in `checks`, but `fits_profile` below only ever reads the hard ones.
+    checks += assessment["rules"]
     flags: list[str] = []
     if not sa.get("available"):
         flags.append("SAscore unavailable; feasibility not checked and scored as neutral")
-    alerts = [entry.GetDescription() for entry in PAINS.GetMatches(mol)]
-    if alerts:
-        flags.append(f"PAINS alert ({', '.join(alerts)}): may interfere with fluorescence or redox assays; check controls")
+    flags += assessment["flags"]
     model = candidate["predictions"].get("model")
     if model and model.get("in_domain") is False:
         flags.append("fluorescence model prediction is outside its training range")
@@ -198,9 +195,8 @@ def validate(candidate: dict, max_sa: float, domain: float) -> None:
     candidate["flags"] = flags
     candidate["fits_profile"] = not failed
     candidate["failed_checks"] = [check["rule"] for check in failed]
-    candidate["descriptors"] = {
-        key: candidate["photophysics"]["biology"][key] for key in ("molecular_weight", "logp", "tpsa", "hbd", "hba", "formal_charge")
-    }
+    candidate["admet"] = assessment
+    candidate["descriptors"] = assessment["descriptors"]
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +292,7 @@ def run(goal: dict, retrieved: list[dict], designed: list[dict], dataset: dict, 
     reference = [smiles for _, smiles, _ in photophysics.CALIBRATION] + [record["smiles"] for record in measured.values()]
     predict(candidates, goal, models, reference)
     for candidate in candidates:
-        validate(candidate, max_sa, domain)
+        validate(candidate, goal, max_sa, domain)
     score(candidates, weights, bool(models))
     pareto(candidates)
     ordered = explain(candidates, weights)
@@ -326,7 +322,7 @@ def run(goal: dict, retrieved: list[dict], designed: list[dict], dataset: dict, 
             "proxy": "photophysics structural proxies with reviewed literature preferences",
             "fluorescence_model": predictor.describe(),
             "surrogate": surrogates,
-            "admet": "computed descriptors only; no ADMET model is bundled",
+            "admet": admet.BASIS,
         },
         "measured_compounds": len(measured),
         "candidates": ordered,

@@ -492,7 +492,7 @@ def test_scorecard_marks_unfit_candidates_with_the_failed_check():
     assert "conjugated_system" in ethanol["failed_checks"]
     assert ethanol["rank"] == len(card["candidates"]), "unfit candidates rank after every fitting one"
     assert card["uncertainty_basis"] == "structural novelty"
-    assert "no ADMET model" in card["models"]["admet"]
+    assert "no trained ADMET model" in card["models"]["admet"]
 
 
 def test_selection_skips_measured_compounds_and_explains_each_pick():
@@ -560,6 +560,131 @@ def test_qc_warns_on_missing_replicates_and_controls_and_keeps_warnings_out_of_t
     [entry] = step6.aggregate(noisy, {"plqy": 1}, {"DES-A"}, 3, 0.3, True, 1, 1)
     assert any("coefficient of variation" in issue for issue in entry["issues"])
     assert entry["used_for_model"], "--accept-warnings lets a warned value train the surrogate"
+
+
+# ---------------------------------------------------------------------------
+# Properties and ADMET — rules, not a model
+# ---------------------------------------------------------------------------
+
+import admet  # noqa: E402
+
+CAFFEINE = "CN1C=NC2=C1C(=O)N(C)C(=O)N2C"
+LUMINOGEN = step3.join("c1cc2nsnc2c2nsnc12", "c1ccc(N(c2ccccc2)c2ccccc2)cc1", 2)
+
+
+def test_rule_violations_are_advisory_and_never_decide_the_profile():
+    with tempfile.TemporaryDirectory() as tmp:
+        card = _scored(tmp)
+    best = card["candidates"][0]
+    rules = {check["rule"]: check for check in best["checks"] if check.get("severity") == "advisory"}
+    assert set(rules) == set(admet.RULES), "every rule set travels with the candidate"
+    assert not any(rule in best["failed_checks"] for rule in admet.RULES)
+    assert best["fits_profile"], "an injected luminogen is outside these rules' scope, so they cannot rule it out"
+
+
+def test_lipinski_tolerates_one_violation_and_names_the_limits_exceeded():
+    heavy = admet.assess(Chem.MolFromSmiles(LUMINOGEN))
+    lipinski = next(check for check in heavy["rules"] if check["rule"] == "lipinski")
+    assert not lipinski["pass"] and "molecular weight" in lipinski["detail"]
+    assert "advisory" in lipinski["severity"] and "injected" in lipinski["scope"]
+    assert next(check for check in admet.assess(Chem.MolFromSmiles(CAFFEINE))["rules"] if check["rule"] == "lipinski")["pass"]
+
+
+def test_solubility_estimate_withholds_a_number_outside_its_training_range():
+    drug_like = admet.assess(Chem.MolFromSmiles(CAFFEINE))["solubility"]
+    assert drug_like["in_domain"] and drug_like["mg_per_ml"] > 0
+    extrapolated = admet.assess(Chem.MolFromSmiles(LUMINOGEN))["solubility"]
+    assert not extrapolated["in_domain"]
+    assert "mg_per_ml" not in extrapolated, "a concentration several log units past the fit is not a number to report"
+    assert "clogP" in extrapolated["out_of_domain"]
+
+
+def test_poor_solubility_and_assay_interference_reach_the_lab_as_flags():
+    with tempfile.TemporaryDirectory() as tmp:
+        card = _scored(tmp)
+    flags = " | ".join(flag for candidate in card["candidates"] for flag in candidate["flags"])
+    assert "co-solvent stock" in flags, "the lab cannot measure what it cannot dissolve"
+    catechol = admet.assess(Chem.MolFromSmiles("Oc1ccccc1O"))
+    assert any("PAINS alert" in flag for flag in catechol["flags"])
+    assert any("Brenk alert" in flag for flag in catechol["flags"])
+    assert not any(check["severity"] != "advisory" for check in catechol["rules"])
+
+
+# ---------------------------------------------------------------------------
+# The design loop: measurements choose the next round's parents
+# ---------------------------------------------------------------------------
+
+
+def _dataset(values: dict[str, float], assay: str = "plqy") -> dict:
+    return {"version": 1, "measurements": [
+        {"used_for_model": True, "inchikey": surrogate.inchikey(smiles), "compound_id": name,
+         "smiles": smiles, "assay": assay, "mean": value}
+        for name, (smiles, value) in values.items()
+    ]}
+
+
+def test_lab_parents_put_the_best_measured_compound_first():
+    dataset = _dataset({"MID": (SERIES[1], 0.3), "BEST": (SERIES[0], 0.6), "WORST": (SERIES[2], 0.1)})
+    parents = step3.lab_parents(dataset, SCORE_GOAL, 8)
+    assert [parent["id"] for parent in parents] == ["BEST", "MID", "WORST"]
+    assert parents[0]["measured"] == {"plqy": 0.6} and parents[0]["origin"] == "measured"
+    assert step3.lab_parents({"version": 0, "measurements": []}, SCORE_GOAL, 8) == []
+
+
+def test_a_single_measured_compound_is_still_a_parent():
+    parents = step3.lab_parents(_dataset({"ONLY": (SERIES[0], 0.4)}), SCORE_GOAL, 8)
+    assert [parent["id"] for parent in parents] == ["ONLY"], "one point has no spread to rank by, and is still worth editing"
+    assert parents[0]["standing"] == 0.0
+
+
+def test_an_edit_of_a_measured_parent_carries_the_parent_value():
+    parents = step3.lab_parents(_dataset({"BEST": ("c1ccc2nsnc2c1", 0.6)}), SCORE_GOAL, 8)
+    designed = step3.generate_edits(parents, SCORE_GOAL, 20)
+    assert designed, "the measured parent should admit at least one goal-directed edit"
+    assert all(entry["parent_measured"] == {"plqy": 0.6} for entry in designed)
+    assert all(entry["parent"] == "BEST" for entry in designed)
+
+
+def test_earlier_rounds_designs_stay_in_the_pool_and_keep_their_round():
+    with tempfile.TemporaryDirectory() as tmp:
+        first = step3.run(SCORE_GOAL, [], "rdkit", 8, 3, 6.0, tmp)
+        assert {molecule["round"] for molecule in first["molecules"]} == {1}
+        second = step3.run(SCORE_GOAL, [], "rdkit", 8, 3, 6.0, tmp, round_number=2, carried=first["molecules"])
+    assert second["carried_forward"] == len(first["molecules"])
+    assert len(second["molecules"]) > len(first["molecules"]), "a round adds candidates, it does not replace them"
+    smiles = [molecule["smiles"] for molecule in second["molecules"]]
+    assert len(smiles) == len(set(smiles)), "a design proposed twice is carried once"
+    assert {molecule["smiles"] for molecule in first["molecules"]} <= set(smiles)
+
+
+def test_next_round_re_enters_at_design_unless_told_otherwise():
+    import pipeline
+
+    args = pipeline.build_parser().parse_args(["--question", "NIR-II photothermal agent", "--mode", "generate-only"])
+    step3_args = {round_number: next(stage.args for stage in pipeline.build(args, "out", round_number) if stage.key == "step3")
+                  for round_number in (1, 2)}
+    assert "--no-parents" in step3_args[1], "round 1 of a generate-only run has nothing to edit"
+    assert "--no-parents" not in step3_args[2], "round 2 edits the compounds the lab measured"
+    assert "--carry-forward" in step3_args[2] and "--carry-forward" not in step3_args[1]
+    assert step3_args[2][step3_args[2].index("--round") + 1] == "2"
+
+
+def test_a_saturated_objective_is_reported_unfitted_rather_than_perfect():
+    import step4_scoring as step4
+
+    flat = _dataset({"A": (SERIES[0], 0.2), "B": (SERIES[1], 0.2), "C": (SERIES[2], 0.2)})
+    models, report = step4.fit_surrogates(flat, SCORE_GOAL)
+    assert "plqy" not in models
+    assert "same utility" in report["plqy"]["status"] and report["plqy"]["n"] == 3
+    spread = _dataset({"A": (SERIES[0], 0.1), "B": (SERIES[1], 0.4), "C": (SERIES[2], 0.6)})
+    assert step4.fit_surrogates(spread, SCORE_GOAL)[1]["plqy"]["status"] == "fitted"
+
+
+def test_a_per_resume_decision_is_not_restored_on_the_next_resume():
+    import pipeline
+
+    assert {"accept_warnings", "no_redesign", "results_from", "next_round"} <= pipeline.PER_RESUME
+    assert not {"batch", "seeds", "weights", "acquisition", "max_cv"} & pipeline.PER_RESUME
 
 
 def test_pipeline_stops_for_the_lab_after_selection():

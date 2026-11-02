@@ -1040,6 +1040,100 @@ describe("molecular design loop summaries", () => {
     expect(parseArtifact('{"artifact":"results","measurements":[]}')).toBeUndefined()
   })
 
+  test("names the measured parents a later round designs from and the designs it kept", () => {
+    const design = (id: string, round: number, parent?: string) => ({
+      smiles: "c1ccccc1",
+      score: 0.6,
+      round,
+      architecture: id,
+      photophysics: {
+        spectral_band: { band: "NIR-II" },
+        channel_balance: { dominant: "photothermal", share: {} },
+      },
+      ...(parent ? { parent, edit: "add_rotor", parent_measured: { plqy: 0.12 } } : {}),
+    })
+    const host = mount("step3", {
+      artifact: "designed",
+      round: 2,
+      generated: 40,
+      passed_gate: 30,
+      carried_forward: 2,
+      parents: {
+        count: 2,
+        measured: 2,
+        source: "2 measured compound(s) first, by standing in the lab dataset",
+        edited: [
+          { id: "DES-A", smiles: "c1ccccc1", measured: { plqy: 0.12 } },
+          { id: "DES-B", smiles: "c1ccccc1", measured: { plqy: 0.04 } },
+        ],
+      },
+      molecules: [design("new", 2, "DES-A"), design("old", 1)],
+    })
+    expect(host.textContent).toContain("40 generated · 30 pass checks · 2 shortlisted · 2 carried forward")
+    expect(host.textContent).toContain("Round 2 edits 2 compounds the lab has measured: DES-A, DES-B")
+  })
+
+  test("shows the solubility estimate and the handling notes the batch hands to the lab", () => {
+    const scores = mount("step4", {
+      artifact: "scores",
+      round: 1,
+      pool: { retrieved: 0, designed: 2, unique: 2 },
+      fits_profile: 2,
+      uncertainty_basis: "structural novelty",
+      candidates: [
+        {
+          ...candidate("DES-A", true),
+          admet: {
+            solubility: {
+              log_s: -11.7,
+              class: "poorly soluble",
+              in_domain: false,
+              out_of_domain: "clogP 11.9 is outside the -3 to 8 of its drug-like training set",
+            },
+            alerts: { PAINS: [], BRENK: ["chinone_1"], NIH: [] },
+          },
+        },
+        {
+          ...candidate("DES-B", true),
+          admet: {
+            solubility: { log_s: -3.1, mg_per_ml: 0.0781, class: "moderately soluble", in_domain: true },
+            alerts: { PAINS: [] },
+          },
+        },
+      ],
+    })
+    expect(scores.textContent).toContain(
+      "Solubility estimate: poorly soluble · extrapolated, clogP 11.9 is outside the -3 to 8 of its drug-like training set · alerts: BRENK",
+    )
+    expect(scores.textContent).toContain("Solubility estimate: moderately soluble · 0.078 mg/mL")
+    expect(scores.textContent).not.toContain("alerts: PAINS")
+
+    const plan = mount("step5", {
+      artifact: "plan",
+      round: 2,
+      batch: [
+        {
+          id: "DES-C",
+          smiles: "c1ccccc1",
+          role: "exploit" as const,
+          acquisition: 1.5,
+          terms: { gain: 1, uncertainty: 0.4, diversity: 0.5, cost: 0.2 },
+          parent: "DES-A",
+          solubility: "poorly soluble",
+          handling: [
+            "ESOL reaches log S -11.7 by extrapolation: a dilute aqueous measurement needs a co-solvent stock",
+          ],
+        },
+      ],
+      assays: [],
+      pre_synthesis: ["Prepare co-solvent stocks for DES-C"],
+      results_template: "results_template_round-2.csv",
+    })
+    expect(plan.textContent).toContain("Edit of DES-A")
+    expect(plan.textContent).toContain("needs a co-solvent stock")
+    expect(plan.textContent).toContain("Prepare co-solvent stocks for DES-C")
+  })
+
   test("marks a run that is waiting for the lab and names the design round", () => {
     const run: Progress = {
       question: "Design a molecule",

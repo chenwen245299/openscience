@@ -126,6 +126,11 @@ def select(card: dict, measured: dict[str, dict], batch: int, weights: dict[str,
             "fits_profile": candidate["fits_profile"],
             "scaffold": frame,
             "new_scaffold": frame not in scaffolds,
+            # What the bench needs to know before touching it: the solubility
+            # class the stock concentration follows from, and the alerts that
+            # decide which controls the run has to carry.
+            "solubility": candidate.get("admet", {}).get("solubility", {}).get("class"),
+            "handling": candidate.get("admet", {}).get("flags", []),
             "selection_reason": (
                 f"Pick #{len(chosen) + 1} of {batch}: {role}, acquisition {value:.3f}"
                 + ("" if candidate["fits_profile"] else "; fallback, no unmeasured candidate fits the full profile")
@@ -200,6 +205,12 @@ def run(goal: dict, card: dict, dataset: dict, output_dir: str, batch: int = 6, 
         "measure_in": "the state of use (nanoparticle or aggregate) as well as dilute solution; record it in the state column",
         "results_columns": COLUMNS,
     }
+    poorly = [entry["id"] for entry in chosen["batch"] if entry.get("solubility") == "poorly soluble"]
+    if poorly:
+        plan["pre_synthesis"].append(
+            f"Prepare co-solvent stocks for {', '.join(poorly)}: the ScoreCard's solubility estimate puts them in the "
+            "poorly soluble class, so record the final solvent, the water fraction and any aggregation in the results file"
+        )
     plan["results_template"] = template(output_dir, plan, replicates)
     log_provenance(output_dir, "step5", "select", {"round": plan["round"], "candidates": chosen["unmeasured"], "kept": len(chosen["batch"])})
     return plan

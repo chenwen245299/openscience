@@ -58,6 +58,7 @@ with tempfile.TemporaryDirectory() as tmp:
     refused = run("step6_feedback.py", "--output-dir", "out", "--results", "lab.csv", ok=False)
     assert "already ingested" in refused.stderr
 
+    first_pool = load("score_card.json")["pool"]["unique"]
     run("pipeline.py", "--question", question, "--output-dir", "out", "--next-round")
     second = load("experiment_plan.json")
     assert second["round"] == 2 and load("progress.json")["round"] == 2
@@ -69,4 +70,22 @@ with tempfile.TemporaryDirectory() as tmp:
         assert (work / "out" / "rounds" / "round-1" / name).is_file(), name
     assert (work / "out" / "rounds" / "round-2" / "experiment_plan.json").is_file()
 
-print("Validated two design rounds: scoring, batch selection, QC ingest, dataset versioning and surrogate recalibration")
+    # The loop closes: the measured compounds become the parents of round 2's
+    # designs, and round 1's designs stay in the pool rather than being retired.
+    designed = load("molecule_set_designed.json")
+    assert designed["round"] == 2 and designed["parents"]["measured"] == 4
+    assert set(ids) == {parent["id"] for parent in designed["parents"]["edited"]}
+    assert all(parent["measured"]["plqy"] > 0 for parent in designed["parents"]["edited"])
+    edits = [molecule for molecule in designed["molecules"] if molecule.get("parent_measured")]
+    assert edits, "round 2 designs are edits of what the lab measured"
+    assert {molecule["round"] for molecule in designed["molecules"]} == {1, 2}
+    assert rescored["pool"]["unique"] > first_pool, "the pool grows with the round"
+
+    # --no-redesign picks again from the pool as it stands, without designing.
+    run("pipeline.py", "--question", question, "--output-dir", "out", "--next-round", "--no-redesign")
+    assert load("molecule_set_designed.json")["molecules"] == designed["molecules"], "no design ran"
+    assert load("score_card.json")["pool"]["unique"] == rescored["pool"]["unique"]
+    assert load("progress.json")["stages"][1]["status"] == "ok"
+
+print("Validated two design rounds: scoring, batch selection, QC ingest, dataset versioning, "
+      "surrogate recalibration and redesign from the measured compounds")

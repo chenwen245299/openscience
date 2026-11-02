@@ -603,6 +603,10 @@ function SurrogateFits(props: { title: string; fits?: Record<string, SurrogateFi
 function CandidateRow(props: { candidate: ScoredCandidate }) {
   const lab = () => Object.entries(props.candidate.predictions?.lab ?? {})
   const measured = () => Object.entries(props.candidate.measured ?? {})
+  const alerts = () =>
+    Object.entries(props.candidate.admet?.alerts ?? {})
+      .filter(([, hits]) => hits.length)
+      .map(([name]) => name)
   return (
     <li class="molpipe__item" data-decision={props.candidate.fits_profile ? "kept" : "excluded"}>
       <CompoundTitle
@@ -639,6 +643,16 @@ function CandidateRow(props: { candidate: ScoredCandidate }) {
             .join(" · ")}
         </p>
       </Show>
+      <Show when={props.candidate.admet?.solubility}>
+        {(water) => (
+          <p class="molpipe__finding-note">
+            Solubility estimate: {water().class}
+            {water().mg_per_ml !== undefined ? ` · ${water().mg_per_ml!.toPrecision(2)} mg/mL` : ""}
+            {water().in_domain ? "" : ` · extrapolated, ${water().out_of_domain}`}
+            {alerts().length ? ` · alerts: ${alerts().join(", ")}` : ""}
+          </p>
+        )}
+      </Show>
       <DecisionReason
         label="Why ranked"
         reason={props.candidate.selection_reason ?? "Ranking reason was not saved in this run."}
@@ -664,6 +678,9 @@ function BatchRow(props: { entry: BatchEntry }) {
         <Show when={props.entry.new_scaffold}>
           <span>New scaffold</span>
         </Show>
+        <Show when={props.entry.parent}>
+          <span>Edit of {props.entry.parent}</span>
+        </Show>
         <span>{props.entry.id}</span>
       </div>
       <div class="molpipe__item-meta">
@@ -671,6 +688,7 @@ function BatchRow(props: { entry: BatchEntry }) {
         {props.entry.terms.uncertainty.toFixed(2)} · diversity {props.entry.terms.diversity.toFixed(2)} · cost{" "}
         {props.entry.terms.cost.toFixed(2)}
       </div>
+      <For each={props.entry.handling ?? []}>{(note) => <p class="molpipe__review">{note}</p>}</For>
       <DecisionReason
         label="Why selected"
         reason={props.entry.selection_reason ?? "Selection reason was not saved in this run."}
@@ -863,7 +881,19 @@ export function MolStageSummary(props: {
               {set().generated ?? set().retrieved ?? 0} {set().artifact === "designed" ? "generated" : "retrieved"}
               {set().passed_gate !== undefined ? ` · ${set().passed_gate} pass checks` : ""}
               {` · ${set().molecules.length} shortlisted`}
+              {set().carried_forward ? ` · ${set().carried_forward} carried forward` : ""}
             </p>
+            <Show when={set().parents?.measured}>
+              {(count) => (
+                <p class="molpipe__note">
+                  Round {set().round} edits {count()} compound{count() === 1 ? "" : "s"} the lab has measured:{" "}
+                  {(set().parents?.edited ?? [])
+                    .filter((parent) => parent.measured)
+                    .map((parent) => parent.id)
+                    .join(", ")}
+                </p>
+              )}
+            </Show>
             <Show when={Object.values(set().rejected_counts ?? {}).some((count) => count > 0)}>
               <p class="molpipe__line">
                 Removed:{" "}

@@ -129,9 +129,17 @@ export type Molecule = {
   }
   gate?: { pass: boolean; checks?: Check[] }
   synthesizability?: { available?: boolean; sa_score?: number; note?: string }
+  round?: number
+  parent_measured?: Record<string, number>
 }
 
-export type Check = { pass: boolean; detail: string; severity?: string; rule?: string }
+export type Check = { pass: boolean; detail: string; severity?: string; rule?: string; scope?: string }
+
+export type Admet = {
+  solubility?: { log_s: number; mg_per_ml?: number; class: string; in_domain: boolean; out_of_domain?: string }
+  alerts?: Record<string, string[]>
+  rules?: Check[]
+}
 
 export type SurrogateFit = { status: string; n?: number; rmse?: number; spearman?: number | null }
 
@@ -156,6 +164,7 @@ export type ScoredCandidate = {
     lab?: Record<string, { utility: number; std: number; scale: string }>
   }
   measured?: Record<string, number>
+  admet?: Admet
   flags?: string[]
   checks?: Check[]
   synthesizability?: Molecule["synthesizability"]
@@ -175,6 +184,9 @@ export type BatchEntry = {
   terms: { gain: number; uncertainty: number; diversity: number; cost: number }
   new_scaffold?: boolean
   fits_profile?: boolean
+  parent?: string
+  solubility?: string | null
+  handling?: string[]
   selection_reason?: string
   selection_details?: string[]
 }
@@ -240,6 +252,14 @@ export type Artifact =
       engine_notes?: string[]
       moves?: string[]
       next_round?: string[]
+      round?: number
+      carried_forward?: number
+      parents?: {
+        count: number
+        measured: number
+        source: string
+        edited?: { id?: string; smiles: string; measured?: Record<string, number> }[]
+      }
     }
   | {
       artifact: "scores"

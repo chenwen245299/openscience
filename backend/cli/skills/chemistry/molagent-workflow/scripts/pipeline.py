@@ -23,6 +23,12 @@ step 6 runs only on a results file the lab produced, passed with
 --results-from, and --next-round then starts the next design round on the
 updated dataset.
 
+--next-round re-enters at step 3, not step 4. The measured compounds become
+the parents the next designs are edited from, earlier rounds' designs stay in
+the pool, and the surrogate trained on the new data scores all of them
+together. Pass --no-redesign to pick another batch from the existing pool
+instead.
+
 Usage:
     python pipeline.py --question "..." --output-dir results/
     python pipeline.py --question "..." --mode literature     # step 1 only
@@ -63,6 +69,12 @@ MODES = {
 # directory. Sub-step detail already lands in `provenance.jsonl` as each
 # source or scaffold is queried; nothing here duplicates it.
 PROGRESS = "progress.json"
+
+# Which stop is being resumed, and whether this particular results file may
+# train the surrogate on QC-warned values, are decisions for the command at
+# hand. They are not saved with the run and not restored on the next resume,
+# unlike the seeds, limits and weights that define it.
+PER_RESUME = {"question", "output_dir", "mode", "review_from", "results_from", "next_round", "no_redesign", "accept_warnings"}
 
 
 class Stage:
@@ -157,7 +169,7 @@ def publish(output_dir: str, question: str, mode: str, stages: list[Stage], outc
         pass
 
 
-def build(args, output_dir: str) -> list[Stage]:
+def build(args, output_dir: str, round_number: int = 1) -> list[Stage]:
     goal_args = ["--question", args.question, "--output-dir", output_dir]
     for flag, value in (("--modalities", args.modalities), ("--band", args.band), ("--ros-type", args.ros_type)):
         if value:
@@ -178,7 +190,10 @@ def build(args, output_dir: str) -> list[Stage]:
         "--engine", args.engine,
         "--keep", str(args.designs),
         "--max-sa", str(args.max_sa),
+        "--round", str(round_number),
     ]
+    if round_number > 1:
+        step3_args.append("--carry-forward")
     step4_args = ["--output-dir", output_dir, "--max-sa", str(args.max_sa)]
     if args.weights:
         step4_args += ["--weights", args.weights]
@@ -189,7 +204,10 @@ def build(args, output_dir: str) -> list[Stage]:
     if args.accept_warnings:
         step6_args.append("--accept-warnings")
 
-    if "step2" not in MODES[args.mode]:
+    # Without step 2 there is nothing to edit in round 1. From round 2 there
+    # is: the compounds the lab measured are parents whatever route found
+    # them, and they are the ones worth editing.
+    if "step2" not in MODES[args.mode] and round_number == 1:
         step3_args.append("--no-parents")
     if args.mode in ("design", "generate-only"):
         step2_args.append("--no-literature")
@@ -262,7 +280,8 @@ def final_summary(output_dir: str) -> None:
                 print(f"  best {best['assay']}: {best['compound_id']} {best['mean']:g} {best['unit']} (n={best['n']})")
         else:
             molecules = payload.get("molecules", [])
-            print(f"\n{label}: {len(molecules)} molecules")
+            carried = payload.get("carried_forward") or 0
+            print(f"\n{label}: {len(molecules)} molecules" + (f" ({carried} carried forward from earlier rounds)" if carried else ""))
             for molecule in molecules[:5]:
                 band = molecule["photophysics"]["spectral_band"]["band"]
                 dominant = molecule["photophysics"]["channel_balance"]["dominant"]
@@ -284,7 +303,8 @@ def restore(stages: list[Stage], previous: dict, keys: set[str]) -> None:
             stage.elapsed = saved.get("seconds", 0.0)
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The command line, as its own function so a test can build the stages it implies."""
     parser = argparse.ArgumentParser(
         description="Design pipeline for theranostic luminogens (steps 1-6)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -317,7 +337,13 @@ def main() -> int:
     parser.add_argument("--results-from", help="Step 6: resume this run with the lab's results file (CSV or JSON)")
     parser.add_argument("--max-cv", type=float, default=0.3, help="Step 6: coefficient of variation allowed across replicates")
     parser.add_argument("--accept-warnings", action="store_true", help="Step 6: let QC-warned values train the surrogate")
-    parser.add_argument("--next-round", action="store_true", help="Score and select again on the updated lab dataset")
+    parser.add_argument("--next-round", action="store_true", help="Start the next design round on the updated lab dataset")
+    parser.add_argument("--no-redesign", action="store_true", help="With --next-round: select from the existing pool instead of designing from the measured compounds")
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
 
     if sum(bool(flag) for flag in (args.review_from, args.results_from, args.next_round)) > 1:
@@ -331,8 +357,7 @@ def main() -> int:
             previous = json.load(handle)
         # A resume must not silently lose seed structures, candidate limits or
         # batch settings when the agent continues with the shorter command.
-        excluded = {"help", "question", "output_dir", "mode", "review_from", "results_from", "next_round"}
-        allowed = set(vars(args)) - excluded
+        allowed = set(vars(args)) - PER_RESUME - {"help"}
         parser.set_defaults(**{key: value for key, value in previous.get("options", {}).items() if key in allowed})
         args = parser.parse_args()
     if (args.results_from or args.next_round) and not previous:
@@ -340,7 +365,16 @@ def main() -> int:
     if resuming and args.mode and previous.get("mode") and args.mode != previous["mode"]:
         parser.error("a resume continues the original run mode; start a separate run to change modes")
     args.mode = args.mode or previous.get("mode") or "full"
-    stages = build(args, output_dir)
+
+    import assays
+
+    # Results answer the round already planned; anything else starts the round
+    # after the last ingest. Known before the stages are built because step 3
+    # tags its designs with it and carries earlier rounds forward.
+    plan_round = read_artifact(output_dir, "plan")["round"] if args.results_from and os.path.isfile(artifact_path(output_dir, "plan")) else None
+    round_number = plan_round or assays.load_dataset(output_dir).get("version", 0) + 1
+
+    stages = build(args, output_dir, round_number)
     keys = [stage.key for stage in stages]
     if resuming:
         goal = read_artifact(output_dir, "goal")
@@ -370,12 +404,11 @@ def main() -> int:
             parser.error("--next-round needs ingested lab results; resume with --results-from first")
         if not results.get("ingested"):
             parser.error("the last results file was not ingested; fix it and resume with --results-from")
-        restore(stages, previous, set(keys[: keys.index("step4")]))
-
-    import assays
-
-    # Results answer the round already planned; anything else starts the round after the last ingest.
-    round_number = read_artifact(output_dir, "plan")["round"] if args.results_from else assays.load_dataset(output_dir).get("version", 0) + 1
+        # The loop re-enters at design: the measured compounds are the parents
+        # worth editing, and a round that only re-ranks the old pool is
+        # choosing from proposals made before any measurement existed.
+        entry = "step4" if args.no_redesign or "step3" not in keys else "step3"
+        restore(stages, previous, set(keys[: keys.index(entry)]))
 
     print(f"Question: {args.question}")
     print(f"Mode: {args.mode} — {len(stages)} stage(s) into {output_dir}; design round {round_number}")
@@ -384,7 +417,7 @@ def main() -> int:
 
         print(f"Ranking: {predictor.describe()}")
 
-    options = {key: value for key, value in vars(args).items() if key not in ("question", "output_dir", "mode", "review_from", "results_from", "next_round")}
+    options = {key: value for key, value in vars(args).items() if key not in PER_RESUME}
     report = lambda outcome="running": publish(output_dir, args.question, args.mode, stages, outcome, options, round_number)
     report()
 
@@ -395,9 +428,9 @@ def main() -> int:
         if stage.key == "step2" and args.mode in ("full", "retrieve"):
             pack = read_artifact(output_dir, "evidence")
             if pack.get("review", {}).get("status") != "complete":
-                for previous in stages:
-                    if previous.key == "step1":
-                        previous.status = "awaiting_review"
+                for earlier in stages:
+                    if earlier.key == "step1":
+                        earlier.status = "awaiting_review"
                 report("awaiting_review")
                 print("\nAGENT NEXT STEP: read the priority paper bodies in literature/*.json, including the methods/results and limitations. Write a review JSON with body quotes, structural motifs/functional groups, conditions and how each finding should guide retrieval/filtering. Then resume this same pipeline with --review-from review.json. This is automatic agent research work, NOT a request for the user's approval.")
                 return 0

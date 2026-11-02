@@ -27,7 +27,9 @@ S1 -->  ISC to T1            ROS, photodynamic therapy (PDT)
 Phi_F + Phi_ISC + Phi_IC is about 1, so these compete. A design target is a
 **balance**, never a maximum, and that is what makes this different from the
 drug-discovery skills in this library: QED, Lipinski and ADMET say nothing
-about whether a molecule emits or crosses to a triplet.
+about whether a molecule emits or crosses to a triplet. Step 4 computes those
+rules anyway, as advisory notes with their scope attached, and never lets one
+rule out a candidate.
 
 Use this skill when the request names fluorescence imaging, PDT, PTT, PAI,
 photosensitizers, ROS or singlet oxygen, an emission window (NIR-I, NIR-II),
@@ -97,7 +99,8 @@ or ask the user whether to read the papers. Common variations:
 | Force a target the question did not state | `--band NIR-II --ros-type I --modalities FLI,PDT,PTT` |
 | Size the lab batch | `--batch 6 --replicates 3` |
 | Ingest the lab's results for this round | `--results-from lab_round1.csv` |
-| Score and select again on the updated dataset | `--next-round` |
+| Start the next design round on the updated dataset | `--next-round` |
+| Pick again from the existing pool, without designing | `--next-round --no-redesign` |
 
 The run also stops after step 5, with outcome `awaiting_results`. That stop
 belongs to the user: give them the experiment plan and its results template,
@@ -115,7 +118,7 @@ question
   -> ScoreCard               step4_scoring.py      predictions with uncertainty, checks, multi-objective score
   -> ExperimentPlan          step5_selection.py    acquisition-ranked lab batch, assays, results template
   -> Results                 step6_feedback.py     QC'd measurements, dataset version, surrogate refit
-                                                   (--next-round returns to step 4)
+                                                   (--next-round returns to step 3)
 ```
 
 Artifacts land in `--output-dir` as `goal_spec.json`, `evidence_pack.json`,
@@ -297,6 +300,20 @@ Candidates are scored, SAscore-filtered, and reported with
 `delta_vs_parent` so an edit's effect is visible on the same proxy as its
 parent.
 
+**Parents come from the lab once there is a lab.** In round 1 the parents are
+the retrieved molecules, ranked by the database step. From round 2 the
+measured compounds lead, ordered by their standing in `lab_dataset.json`
+(the mean of their z-scores across the objectives, because a fraction and a
+log fold change do not add up), and the retrieved ranking fills the rest.
+Each design then carries `parent_measured`, so the product can be compared
+against its parent on the assay that was actually run. Earlier rounds'
+designs stay in the MoleculeSet, tagged with the round that proposed them,
+and `carried_forward` counts them: a candidate nobody measured is still a
+candidate.
+
+This is what closes the loop. Without it every round would select from
+proposals made before any measurement existed.
+
 `--engine reinvent` hands off to REINVENT 4 when it is importable. It is not
 wired to a scoring config yet, so it reports what is missing and falls back
 to RDKit rather than pretending to have run.
@@ -313,13 +330,28 @@ block>`, so a structure keeps one ID across rounds and lab results link to it.
   three measured compounds. Without lab data, uncertainty is structural
   novelty against reference dyes and measured compounds.
 - **Validate**: validity, the GoalSpec gate, SAscore against `--max-sa`,
-  PAINS alerts, and an out-of-domain flag when nothing measured is similar.
-  No ADMET model is bundled; descriptors are reported as descriptors.
+  the property rules of `admet.py`, and an out-of-domain flag when nothing
+  measured is similar. A surrogate whose measured compounds all share one
+  utility is reported unfitted rather than as a model with zero error.
 - **Score**: a weighted mean of profile fit, feasibility and (once fitted)
   the lab surrogate (`--weights`), plus the Pareto front.
 
 "Fits the full profile" means no hard check failed and the SAscore is under
 the ceiling. Candidates that do not fit stay in the ScoreCard with the reason.
+
+**Properties and ADMET (`admet.py`)** is rules, not a model: RDKit
+descriptors, Lipinski, Veber and Egan as **advisory** checks that carry
+their own scope, an ESOL (Delaney 2004) solubility estimate, and the PAINS,
+Brenk and NIH alert catalogues. Nothing here is hard, because these rules
+describe oral small-molecule drugs and an injected, often nanoformulated
+luminogen is outside their scope -- a Lipinski violation is a note for the
+formulation, not a reason to drop a candidate. Two things do reach the
+experiment as flags: a solubility class that means the lab needs a
+co-solvent stock, and an alert naming a group that can decompose or
+interfere with exactly the fluorescence and redox readouts this pipeline
+depends on. Past ESOL's fitted range -- and a NIR-II luminogen at clogP 12
+is far past it -- the estimate is reported as a direction and the
+concentration is withheld.
 
 ### Step 5 — Active learning (`step5_selection.py`)
 
@@ -334,7 +366,10 @@ the rest of the pool. Measured compounds are never reselected.
 The plan lists the assays the GoalSpec needs (`assays.py`), each with its
 control, protocol and replicate count, the checks to run before synthesis
 (TD-DFT, retrosynthesis), and writes `results_template_round-N.csv` with one
-row per compound, assay and replicate plus control rows.
+row per compound, assay and replicate plus control rows. Each entry also
+carries its solubility class and the handling notes step 4 raised, and a
+batch with a poorly soluble compound adds a pre-synthesis line asking for
+co-solvent stocks and for the final solvent to be recorded.
 
 ### Step 6 — Wet-lab feedback (`step6_feedback.py`)
 
@@ -352,7 +387,10 @@ Runs only on a results file from the lab, passed with `--results-from`.
   and the step-4 structural fit is compared with the measurements by rank
   correlation, so the proxy's usefulness is measured rather than assumed.
 
-`--next-round` then reruns steps 4 and 5 on the updated dataset.
+`--next-round` then starts the next round at **step 3**: the measured
+compounds become the parents, the new designs join the pool with the earlier
+rounds', and the refitted surrogate scores all of them together.
+`--no-redesign` keeps the pool as it is and only picks again.
 
 ## The photophysics layer (`photophysics.py`)
 
