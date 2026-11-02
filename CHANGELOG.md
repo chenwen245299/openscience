@@ -8,6 +8,7 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ## Unreleased
 
+- Complete the molecular design loop with steps 4 to 6: score retrieved and designed candidates with uncertainty, validity, synthesis and applicability checks; select a lab batch by gain, uncertainty, diversity and cost with an assay plan and results template; and ingest the lab's results with unit, range, replicate and control QC into a versioned dataset that refits a Gaussian-process surrogate for the next round. Design runs wait for lab results instead of inventing them, and the Design run panel shows each round's scores, batch and measurements.
 - Keep saved research scripts compatible with earlier bundled module paths when their source exactly matches the current app; inspect only that file without granting access to the old cache directory.
 - Fix Python source inspection after shell directory changes and include statically imported bundled skill modules in isolated risk review; add a fixed literature run/source interface that retrieves, caches and saves addressed full-text evidence without agent-written download scripts.
 - Remove the separate Values view from molecular literature review; present Findings as body-reviewed design principles, precautions and techniques with verifiable paper citations, keep numerical evidence inside paper cards, and carry all takeaways into database and design outputs.

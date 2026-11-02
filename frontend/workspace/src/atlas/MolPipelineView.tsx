@@ -28,14 +28,19 @@ export function MolPipelineView(props: {
         </div>
         <div class="molpipe__meta">
           <span data-outcome={run().outcome}>
-            {run().outcome === "running"
-              ? "Running"
-              : run().outcome === "awaiting_review"
-                ? "Reviewing literature"
-                : run().outcome === "ok"
-                  ? "Complete"
-                  : "Failed"}
+            {
+              {
+                running: "Running",
+                awaiting_review: "Reviewing literature",
+                awaiting_results: "Awaiting lab results",
+                ok: "Complete",
+                failed: "Failed",
+              }[run().outcome]
+            }
           </span>
+          <Show when={run().round && run().stages.some((stage) => stage.key === "step4")}>
+            <span>Round {run().round}</span>
+          </Show>
           <span>
             {done()}/{run().stages.length} stages
           </span>
@@ -65,6 +70,7 @@ export function MolPipelineView(props: {
                           pending: "Pending",
                           running: "Running",
                           awaiting_review: "Reviewing body",
+                          awaiting_results: "Awaiting lab",
                           ok: "Done",
                           failed: "Failed",
                           no_artifact: "Missing results",
@@ -79,6 +85,12 @@ export function MolPipelineView(props: {
 
                   <Show when={stage.status === "skipped_no_rdkit"}>
                     <div class="molpipe__note">Skipped: the molecular design runtime is unavailable.</div>
+                  </Show>
+                  <Show when={stage.status === "awaiting_results"}>
+                    <div class="molpipe__note">
+                      Waiting for lab results. Run the experiment plan, fill in its results template, then ask this
+                      session to ingest the file.
+                    </div>
                   </Show>
 
                   <MolStageSummary
@@ -97,9 +109,11 @@ export function MolPipelineView(props: {
         </For>
       </ol>
 
-      <Show when={run().stages.some((stage) => stage.key === "step2" || stage.key === "step3")}>
+      <Show when={run().stages.some((stage) => ["step2", "step3", "step4", "step5"].includes(stage.key))}>
         <footer class="molpipe__foot">
-          Rankings are structural estimates. Candidate properties still need validation.
+          {run().stages.some((stage) => stage.key === "step6" && stage.status === "ok")
+            ? "Only values in the lab dataset are measured; other rankings remain estimates."
+            : "Rankings are structural estimates. Candidate properties still need validation."}
         </footer>
       </Show>
     </>

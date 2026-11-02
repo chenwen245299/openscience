@@ -127,6 +127,31 @@ def predict(smiles: str, solvent: str = DEFAULT_SOLVENT) -> dict | None:
     }
 
 
+def spread(smiles: str, solvent: str = DEFAULT_SOLVENT) -> dict | None:
+    """
+    Standard deviation across the forest's trees for absorption and emission.
+
+    Tree disagreement is a cheap uncertainty signal, not a calibrated interval:
+    it shrinks where the training data is dense and says nothing about errors
+    the whole forest shares outside it. None without a model or a forest.
+    """
+    if not available():
+        return None
+    features = featurise(smiles, solvent)
+    if features is None:
+        return None
+    import numpy as np
+
+    row = features.reshape(1, -1)
+    out = {}
+    for target in ("absorption", "emission"):
+        model = _load()[target]
+        if not hasattr(model, "estimators_"):
+            return None
+        out[f"{target}_nm_std"] = round(float(np.std([tree.predict(row)[0] for tree in model.estimators_])), 1)
+    return out
+
+
 # Band edges in nm, used to score a predicted wavelength against a GoalSpec.
 BAND_EDGES = {"UV": (200, 420), "visible": (420, 700), "NIR-I": (700, 1000), "NIR-II": (1000, 1700)}
 

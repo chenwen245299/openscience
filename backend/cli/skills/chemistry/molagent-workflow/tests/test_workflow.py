@@ -339,9 +339,12 @@ def test_downstream_stage_refuses_to_run_without_its_upstream_artifact():
 def test_pipeline_modes_cover_the_documented_chain():
     import pipeline
 
-    assert pipeline.MODES["full"] == ["goal", "step1", "step2", "step3"]
+    assert pipeline.MODES["full"] == ["goal", "step1", "step2", "step3", "step4", "step5", "step6"]
     for stages in pipeline.MODES.values():
         assert stages[0] == "goal", "every mode must establish a GoalSpec first"
+        # The lab loop is all or nothing: scoring without selection, or selection
+        # without the ingest that answers it, leaves a round that cannot close.
+        assert not {"step4", "step5", "step6"} & set(stages) or stages[-3:] == ["step4", "step5", "step6"]
 
 
 # ---------------------------------------------------------------------------
@@ -395,3 +398,181 @@ def test_blend_keeps_the_proxy_in_the_majority():
     assert perfect["score"] <= 0.31
     assert perfect["ml_used"] is True
     assert perfect["proxy_score"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Steps 4-6 — scoring, active learning, wet-lab feedback
+# ---------------------------------------------------------------------------
+
+import assays  # noqa: E402
+import surrogate  # noqa: E402
+
+LOOP_GOAL = goalspec.parse("NIR-II AIE agent for fluorescence imaging and photothermal therapy, type I PDT for hypoxic tumours")
+# The scoring fixtures are push-pull fluorophores with no ISC route, so their goal leaves out PDT.
+SCORE_GOAL = goalspec.parse("NIR-II AIE agent for fluorescence imaging and photothermal therapy")
+SERIES = ["c1ccc2nsnc2c1", "c1ccc2ccccc2c1", "c1ccc2cc3ccccc3cc2c1", "O=c1ccc2ccccc2o1", "c1ccc(-c2ccccc2)cc1"]
+
+
+def test_surrogate_refuses_to_fit_two_points():
+    with pytest.raises(ValueError, match="at least 3"):
+        surrogate.Surrogate(SERIES[:2], [0.1, 0.2])
+
+
+def test_surrogate_is_confident_where_measured_and_uncertain_far_away():
+    model = surrogate.Surrogate(SERIES[:4], [0.1, 0.4, 0.6, 0.2])
+    _, near = model.predict([SERIES[2]])
+    _, far = model.predict(["CCCCCCCCCCCCCCCCO"])
+    assert near[0] < far[0]
+    assert far[0] > 0.9, "nothing similar was measured, so the posterior should be near the prior"
+
+
+def test_leave_one_out_reports_error_on_unseen_points():
+    report = surrogate.Surrogate(SERIES, [0.1, 0.4, 0.6, 0.2, 0.3]).leave_one_out()
+    assert report["n"] == 5 and report["rmse"] > 0
+    assert report["noise"] in surrogate.NOISE_GRID
+
+
+def test_spearman_needs_three_pairs_and_handles_ties():
+    assert surrogate.spearman([1, 2], [1, 2]) is None
+    assert surrogate.spearman([1, 2, 3, 4], [10, 20, 30, 40]) == 1.0
+    assert surrogate.spearman([1, 1, 1], [1, 2, 3]) is None
+
+
+def test_expected_improvement_grows_with_mean_and_with_uncertainty():
+    assert surrogate.expected_improvement(1.0, 0.1, 0.0) > surrogate.expected_improvement(0.0, 0.1, 0.0)
+    assert surrogate.expected_improvement(0.0, 1.0, 0.0) > surrogate.expected_improvement(0.0, 0.1, 0.0)
+    assert surrogate.expected_improvement(-1.0, 0.0, 0.0) == 0.0
+
+
+def test_objectives_follow_the_goalspec():
+    assert assays.objectives(LOOP_GOAL) == ["plqy", "emission_max", "ros_type_i_signal", "photothermal_efficiency"]
+    type_two = goalspec.parse("singlet oxygen photosensitizer for PDT")
+    assert assays.objectives(type_two) == ["singlet_oxygen_yield"]
+    assert assays.panel(type_two)[0] == "absorption_max"
+
+
+def test_units_convert_or_are_refused():
+    assert assays.convert("plqy", 12.0, "%") == pytest.approx(0.12)
+    assert assays.convert("dark_cytotoxicity_ic50", 500, "nM") == pytest.approx(0.5)
+    assert assays.convert("plqy", 0.12, "nm") is None
+    assert not assays.in_range("plqy", 1.2)
+
+
+def test_fold_change_is_log_scaled_and_emission_scored_against_the_window():
+    assert assays.utility("ros_type_i_signal", 100.0, LOOP_GOAL) == pytest.approx(2.0)
+    assert assays.utility("emission_max", 1100.0, LOOP_GOAL) == 1.0
+    assert assays.utility("emission_max", 700.0, LOOP_GOAL) < 1.0
+    assert assays.utility("absorption_max", 700.0, LOOP_GOAL) is None
+
+
+def _scored(tmp: str, dataset: dict | None = None):
+    import step4_scoring as step4
+
+    designed = [{"smiles": step3.join("c1cc2nsnc2c2nsnc12", "c1ccc(N(c2ccccc2)c2ccccc2)cc1", 2)},
+                {"smiles": step3.join("c1ccc2nsnc2c1", "c1ccc(N(c2ccccc2)c2ccccc2)cc1", 2)},
+                {"smiles": "CCO"}]
+    retrieved = [{"id": "CID123", "smiles": designed[1]["smiles"]}]
+    return step4.run(SCORE_GOAL, retrieved, designed, dataset or {"version": 0, "measurements": []}, tmp)
+
+
+def test_scorecard_keeps_database_ids_and_gives_designs_stable_ids():
+    with tempfile.TemporaryDirectory() as tmp:
+        card = _scored(tmp)
+    ids = {c["id"] for c in card["candidates"]}
+    assert "CID123" in ids, "a retrieved molecule keeps its database ID even when a design duplicates it"
+    assert card["pool"]["unique"] == 3
+    assert all(c["id"] == "CID123" or c["id"] == f"DES-{c['inchikey'][:14]}" for c in card["candidates"])
+
+
+def test_scorecard_marks_unfit_candidates_with_the_failed_check():
+    with tempfile.TemporaryDirectory() as tmp:
+        card = _scored(tmp)
+    ethanol = next(c for c in card["candidates"] if c["smiles"] == "CCO")
+    assert not ethanol["fits_profile"]
+    assert "conjugated_system" in ethanol["failed_checks"]
+    assert ethanol["rank"] == len(card["candidates"]), "unfit candidates rank after every fitting one"
+    assert card["uncertainty_basis"] == "structural novelty"
+    assert "no ADMET model" in card["models"]["admet"]
+
+
+def test_selection_skips_measured_compounds_and_explains_each_pick():
+    import step5_selection as step5
+
+    with tempfile.TemporaryDirectory() as tmp:
+        card = _scored(tmp)
+        fit = [c for c in card["candidates"] if c["fits_profile"]]
+        dataset = {"version": 0, "measurements": [
+            {"used_for_model": True, "inchikey": fit[0]["inchikey"], "compound_id": fit[0]["id"], "smiles": fit[0]["smiles"], "assay": "plqy", "mean": 0.1}
+        ]}
+        plan = step5.run(SCORE_GOAL, card, dataset, tmp, batch=3)
+        assert fit[0]["id"] not in {entry["id"] for entry in plan["batch"]}
+        assert all(entry["role"] in ("exploit", "explore", "diversify") for entry in plan["batch"])
+        assert all("Weighted terms" in entry["selection_details"][0] for entry in plan["batch"])
+        with open(os.path.join(tmp, plan["results_template"]), encoding="utf-8") as handle:
+            header = handle.readline().strip().split(",")
+        assert header == step5.COLUMNS
+
+
+def test_selection_refuses_a_stale_scorecard():
+    import step5_selection as step5
+
+    with tempfile.TemporaryDirectory() as tmp:
+        card = _scored(tmp)
+        with pytest.raises(ValueError, match="rerun step 4"):
+            step5.run(SCORE_GOAL, card, {"version": 1, "measurements": []}, tmp)
+
+
+def test_ingest_rejects_rows_that_cannot_be_linked_or_read():
+    import step6_feedback as step6
+
+    card = {"candidates": [{"id": "DES-A", "inchikey": surrogate.inchikey(SERIES[0]), "smiles": SERIES[0]}]}
+    known = {c["id"]: c for c in card["candidates"]}
+    by_key = {c["inchikey"]: c for c in card["candidates"]}
+    rows = [
+        {"compound_id": "DES-A", "assay": "plqy", "value": "12", "unit": "%"},
+        {"compound_id": "DES-A", "assay": "plqy", "value": "", "unit": "%"},
+        {"compound_id": "NOPE", "assay": "plqy", "value": "0.1", "unit": "fraction"},
+        {"compound_id": "DES-A", "smiles": "CCO", "assay": "plqy", "value": "0.1", "unit": "fraction"},
+        {"compound_id": "DES-A", "assay": "plqy", "value": "0.1", "unit": "nm"},
+        {"compound_id": "DES-A", "assay": "brightness", "value": "3", "unit": "au"},
+        {"compound_id": "", "assay": "emission_max", "value": "0", "unit": "", "control": "solvent blank"},
+    ]
+    accepted, rejected, controls, blank = step6.check(rows, known, by_key)
+    assert [entry["value"] for entry in accepted] == [pytest.approx(0.12)]
+    assert blank == 1 and controls == {"emission_max": 1}
+    reasons = " | ".join(entry["reason"] for entry in rejected)
+    assert "not in this run's ScoreCard" in reasons
+    assert "InChIKey differs" in reasons
+    assert "not accepted for plqy" in reasons
+    assert "unknown assay" in reasons
+
+
+def test_qc_warns_on_missing_replicates_and_controls_and_keeps_warnings_out_of_the_model():
+    import step6_feedback as step6
+
+    compound = {"id": "DES-A", "inchikey": "KEY", "smiles": SERIES[0]}
+    accepted = [{"row": 2, "compound": compound, "assay": "plqy", "value": 0.1, "state": "", "protocol": "", "solvent": ""}]
+    [entry] = step6.aggregate(accepted, {}, {"DES-A"}, 3, 0.3, False, 1, 1)
+    assert entry["qc"] == "warn" and not entry["used_for_model"]
+    assert any("fewer than 3" in issue for issue in entry["issues"])
+    assert any("no control" in issue for issue in entry["issues"])
+    noisy = [{**accepted[0], "value": value} for value in (0.1, 0.3, 0.5)]
+    [entry] = step6.aggregate(noisy, {"plqy": 1}, {"DES-A"}, 3, 0.3, True, 1, 1)
+    assert any("coefficient of variation" in issue for issue in entry["issues"])
+    assert entry["used_for_model"], "--accept-warnings lets a warned value train the surrogate"
+
+
+def test_pipeline_stops_for_the_lab_after_selection():
+    with tempfile.TemporaryDirectory() as tmp:
+        result = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "pipeline.py"), "--question", "NIR-II photothermal agent",
+             "--output-dir", "./out", "--mode", "generate-only", "--batch", "2"],
+            cwd=tmp, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "WAITING FOR THE LAB" in result.stdout
+        with open(os.path.join(tmp, "out", "progress.json"), encoding="utf-8") as handle:
+            progress = json.load(handle)
+        assert progress["outcome"] == "awaiting_results"
+        assert progress["stages"][-1] == {**progress["stages"][-1], "key": "step6", "status": "awaiting_results"}
+        assert not os.path.exists(os.path.join(tmp, "out", "lab_dataset.json")), "no measured value may exist before the lab returns one"

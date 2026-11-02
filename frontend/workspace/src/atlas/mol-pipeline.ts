@@ -1,7 +1,19 @@
+const STATUSES = [
+  "pending",
+  "running",
+  "awaiting_review",
+  "awaiting_results",
+  "ok",
+  "failed",
+  "no_artifact",
+  "skipped_no_rdkit",
+] as const
+const OUTCOMES = ["running", "awaiting_review", "awaiting_results", "ok", "failed"] as const
+
 export type StageState = {
   key: string
   title: string
-  status: "pending" | "running" | "awaiting_review" | "ok" | "failed" | "no_artifact" | "skipped_no_rdkit"
+  status: (typeof STATUSES)[number]
   seconds: number
   started: string | null
   produces: string
@@ -11,7 +23,8 @@ export type Progress = {
   question: string
   mode: string
   output_dir: string
-  outcome: "running" | "awaiting_review" | "ok" | "failed"
+  outcome: (typeof OUTCOMES)[number]
+  round?: number
   updated: string
   stages: StageState[]
 }
@@ -114,8 +127,80 @@ export type Molecule = {
     in_domain?: boolean
     components?: Record<string, number>
   }
-  gate?: { pass: boolean; checks?: { pass: boolean; detail: string; severity?: string; rule?: string }[] }
+  gate?: { pass: boolean; checks?: Check[] }
   synthesizability?: { available?: boolean; sa_score?: number; note?: string }
+}
+
+export type Check = { pass: boolean; detail: string; severity?: string; rule?: string }
+
+export type SurrogateFit = { status: string; n?: number; rmse?: number; spearman?: number | null }
+
+export type ScoredCandidate = {
+  id: string
+  smiles: string
+  origin: "retrieved" | "designed"
+  name?: string
+  url?: string
+  architecture?: string
+  edit?: string
+  score: number
+  rank?: number
+  fits_profile: boolean
+  failed_checks?: string[]
+  pareto_front?: number
+  objectives?: Record<string, number>
+  uncertainty?: { value: number; basis: string; nearest_similarity?: number }
+  predictions?: {
+    spectral_band?: string
+    dominant_channel?: string
+    lab?: Record<string, { utility: number; std: number; scale: string }>
+  }
+  measured?: Record<string, number>
+  flags?: string[]
+  checks?: Check[]
+  synthesizability?: Molecule["synthesizability"]
+  selection_reason?: string
+  selection_details?: string[]
+}
+
+export type BatchEntry = {
+  id: string
+  smiles: string
+  name?: string
+  url?: string
+  architecture?: string
+  edit?: string
+  role: "exploit" | "explore" | "diversify"
+  acquisition: number
+  terms: { gain: number; uncertainty: number; diversity: number; cost: number }
+  new_scaffold?: boolean
+  fits_profile?: boolean
+  selection_reason?: string
+  selection_details?: string[]
+}
+
+export type PlannedAssay = {
+  assay: string
+  label: string
+  unit: string
+  control: string
+  protocol: string
+  objective?: boolean
+  replicates?: number
+}
+
+export type Measurement = {
+  compound_id: string
+  smiles: string
+  assay: string
+  unit: string
+  mean: number
+  sd?: number | null
+  n: number
+  state?: string
+  qc: "pass" | "warn"
+  issues?: string[]
+  used_for_model?: boolean
 }
 
 export type Artifact =
@@ -156,12 +241,53 @@ export type Artifact =
       moves?: string[]
       next_round?: string[]
     }
+  | {
+      artifact: "scores"
+      round: number
+      pool: { retrieved: number; designed: number; unique: number; invalid?: number }
+      fits_profile: number
+      weights?: Record<string, number>
+      uncertainty_basis?: string
+      models?: { fluorescence_model?: string; admet?: string; surrogate?: Record<string, SurrogateFit> }
+      measured_compounds?: number
+      candidates: ScoredCandidate[]
+    }
+  | {
+      artifact: "plan"
+      round: number
+      batch: BatchEntry[]
+      unmeasured?: number
+      fallback?: boolean
+      gain_basis?: string
+      assays: PlannedAssay[]
+      replicates?: number
+      pre_synthesis?: string[]
+      measure_in?: string
+      results_template?: string
+    }
+  | {
+      artifact: "results"
+      round: number
+      dataset_version: number
+      ingested: boolean
+      rows: { total: number; accepted: number; rejected: number; blank: number; controls: number }
+      rejected?: { row: number; compound_id?: string; assay?: string; reason: string }[]
+      measurements: Measurement[]
+      qc?: { pass: number; warn: number; used_for_model: number }
+      batch_coverage?: { planned: number; measured: number; missing: string[] }
+      recalibration?: Record<string, SurrogateFit>
+      proxy_calibration?: Record<string, { n: number; spearman: number | null }>
+      next_round?: string[]
+    }
 
 export const ARTIFACT_FILES: Record<string, string> = {
   goal: "goal_spec.json",
   step1: "evidence_pack.json",
   step2: "molecule_set_retrieved.json",
   step3: "molecule_set_designed.json",
+  step4: "score_card.json",
+  step5: "experiment_plan.json",
+  step6: "lab_results.json",
 }
 
 export function parseProgress(body: string): Progress | undefined {
@@ -172,7 +298,7 @@ export function parseProgress(body: string): Progress | undefined {
     typeof value.mode !== "string" ||
     typeof value.output_dir !== "string" ||
     typeof value.updated !== "string" ||
-    !["running", "awaiting_review", "ok", "failed"].includes(value.outcome ?? "") ||
+    !OUTCOMES.some((outcome) => outcome === value.outcome) ||
     !Array.isArray(value.stages) ||
     !value.stages.length ||
     !value.stages.every(
@@ -183,9 +309,7 @@ export function parseProgress(body: string): Progress | undefined {
         typeof stage.produces === "string" &&
         typeof stage.seconds === "number" &&
         (stage.started === null || typeof stage.started === "string") &&
-        ["pending", "running", "awaiting_review", "ok", "failed", "no_artifact", "skipped_no_rdkit"].includes(
-          stage.status,
-        ),
+        STATUSES.some((status) => status === stage.status),
     )
   )
     return undefined
@@ -198,6 +322,9 @@ export function parseArtifact(body: string): Artifact | undefined {
   if (value?.artifact === "evidence" && Array.isArray(value.papers)) return value
   if ((value?.artifact === "retrieved" || value?.artifact === "designed") && Array.isArray(value.molecules))
     return value
+  if (value?.artifact === "scores" && Array.isArray(value.candidates) && value.pool) return value
+  if (value?.artifact === "plan" && Array.isArray(value.batch) && Array.isArray(value.assays)) return value
+  if (value?.artifact === "results" && Array.isArray(value.measurements) && value.rows) return value
   return undefined
 }
 

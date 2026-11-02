@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url"
 import type { JSX } from "solid-js"
 import solid from "vite-plugin-solid"
 import { createTestServer } from "../../test/vite"
-import { parseArtifact, type Artifact, type Progress, type Provenance } from "./mol-pipeline"
+import { parseArtifact, parseProgress, type Artifact, type Progress, type Provenance } from "./mol-pipeline"
 import { findingPaper, findingValue } from "./mol-pipeline-reasons"
 
 const server = await createTestServer({
@@ -827,5 +827,248 @@ describe("molecular stage summaries", () => {
     expect(pipeline.state.run).toBeUndefined()
     expect(pipeline.state.trace).toHaveLength(0)
     expect(Object.keys(pipeline.state.artifacts)).toHaveLength(0)
+  })
+})
+
+describe("molecular design loop summaries", () => {
+  const candidate = (id: string, fits: boolean) => ({
+    id,
+    smiles: "c1ccccc1",
+    origin: "designed" as const,
+    architecture: `${id} design`,
+    score: fits ? 0.62 : 0.1,
+    fits_profile: fits,
+    failed_checks: fits ? [] : ["conjugated_system"],
+    pareto_front: fits ? 1 : 2,
+    uncertainty: { value: 0.77, basis: "structural novelty" },
+    selection_reason: fits ? "Fits the full profile; rank #1" : "Does not fit the profile: sp2 network too small",
+    selection_details: ["Objectives: fit 0.700 x weight 0.5"],
+    checks: [{ rule: "conjugated_system", pass: fits, detail: "largest sp2 network", severity: "hard" }],
+  })
+
+  test("shows the ScoreCard pool, profile fit, uncertainty basis and why each candidate ranks where it does", () => {
+    const host = mount("step4", {
+      artifact: "scores",
+      round: 1,
+      pool: { retrieved: 1, designed: 2, unique: 3 },
+      fits_profile: 2,
+      uncertainty_basis: "structural novelty",
+      models: { admet: "computed descriptors only; no ADMET model is bundled", surrogate: {} },
+      candidates: [candidate("CID1", true), candidate("DES-A", true), candidate("DES-B", false)],
+    })
+    expect(host.textContent).toContain("3 candidates scored (1 retrieved, 2 designed) · 2 fit the full profile")
+    expect(host.textContent).toContain("no lab measurements yet; uncertainty is structural novelty")
+    expect(host.textContent).toContain("ADMET: computed descriptors only; no ADMET model is bundled")
+    expect(host.textContent).not.toContain("Lab surrogate")
+    expect(host.querySelector<HTMLDetailsElement>('[data-output="scores"]')?.open).toBe(false)
+    expect(host.textContent).toContain("Does not fit · conjugated system · score 0.100")
+    expect(host.textContent).toContain("Fits the full profile · score 0.620 · uncertainty 0.77 · Pareto front 1")
+    expect(host.textContent).toContain("Compound ID: CID1")
+    expect(host.textContent).not.toContain("c1ccccc1")
+  })
+
+  test("shows lab surrogate fits and predictions only when measurements trained them", () => {
+    const host = mount("step4", {
+      artifact: "scores",
+      round: 2,
+      pool: { retrieved: 0, designed: 1, unique: 1 },
+      fits_profile: 1,
+      uncertainty_basis: "lab surrogate",
+      measured_compounds: 4,
+      models: {
+        surrogate: {
+          plqy: { status: "fitted", n: 4, rmse: 0.0466, spearman: -0.2 },
+          emission_max: { status: "not fitted: needs 3 measured compounds", n: 2 },
+        },
+      },
+      candidates: [
+        {
+          ...candidate("DES-A", true),
+          measured: { plqy: 0.1196 },
+          predictions: { lab: { plqy: { utility: 0.0985, std: 0.0186, scale: "fraction" } } },
+        },
+      ],
+    })
+    expect(host.textContent).toContain(
+      "Round 2: predictions and uncertainty from a surrogate trained on 4 measured compounds",
+    )
+    expect(host.textContent).toContain("plqy: 4 compounds · leave-one-out RMSE 0.0466 · rank correlation -0.20")
+    expect(host.querySelector('[data-surrogate="emission_max"]')).toBeNull()
+    expect(host.textContent).toContain("Measured: plqy 0.120")
+    expect(host.textContent).toContain("Lab surrogate: plqy 0.099 ± 0.019 (fraction)")
+  })
+
+  test("shows the selected batch with its roles, acquisition terms, assays and results template", () => {
+    const plan = {
+      artifact: "plan" as const,
+      round: 1,
+      unmeasured: 10,
+      gain_basis: "predicted performance (ScoreCard score); no lab surrogate yet",
+      batch: [
+        {
+          id: "DES-A",
+          smiles: "c1ccccc1",
+          architecture: "D-A-D",
+          role: "exploit" as const,
+          acquisition: 1.668,
+          terms: { gain: 1, uncertainty: 0.79, diversity: 0.7, cost: 0.1 },
+          new_scaffold: true,
+          selection_reason: "Pick #1 of 2: exploit, acquisition 1.668",
+          selection_details: ["Weighted terms: gain 1.000 x 1"],
+        },
+        {
+          id: "DES-B",
+          smiles: "c1ccccc1",
+          role: "explore" as const,
+          acquisition: 1.2,
+          terms: { gain: 0.4, uncertainty: 0.99, diversity: 0.5, cost: 0.2 },
+        },
+      ],
+      assays: [
+        {
+          assay: "plqy",
+          label: "Photoluminescence quantum yield",
+          unit: "fraction",
+          control: "reference dye with a stated literature quantum yield",
+          protocol: "Relative method against a reference dye.",
+          replicates: 3,
+        },
+      ],
+      pre_synthesis: ["TD-DFT on the batch"],
+      measure_in: "the state of use",
+      results_template: "results_template_round-1.csv",
+    }
+    const host = mount("step5", plan)
+    expect(host.textContent).toContain("2 compounds selected from 10 unmeasured candidates · round 1")
+    expect([...host.querySelectorAll("[data-roles] span")].map((chip) => chip.textContent)).toEqual([
+      "Exploit 1",
+      "Explore 1",
+    ])
+    expect(host.textContent).toContain("acquisition 1.668 · gain 1.00 · uncertainty 0.79 · diversity 0.70 · cost 0.10")
+    expect(host.textContent).toContain("New scaffold")
+    expect(host.textContent).toContain(
+      "Photoluminescence quantum yield (fraction, 3 replicates): Relative method against a reference dye. Control: reference dye",
+    )
+    expect(host.textContent).toContain("Results template: results_template_round-1.csv")
+    expect(host.textContent).not.toContain("fallback")
+    expect(mount("step5", { ...plan, fallback: true }).textContent).toContain("this batch is a fallback for review")
+  })
+
+  test("shows QC, rejected rows, coverage and recalibration from the lab results without inventing values", () => {
+    const results = {
+      artifact: "results" as const,
+      round: 1,
+      dataset_version: 1,
+      ingested: true,
+      rows: { total: 8, accepted: 4, rejected: 1, blank: 2, controls: 1 },
+      rejected: [{ row: 5, reason: "unit 'kg' not accepted for plqy; accepted: fraction, %" }],
+      qc: { pass: 1, warn: 1, used_for_model: 1 },
+      batch_coverage: { planned: 2, measured: 1, missing: ["DES-B"] },
+      measurements: [
+        {
+          compound_id: "DES-A",
+          smiles: "c1ccccc1",
+          assay: "plqy",
+          unit: "fraction",
+          mean: 0.12,
+          sd: 0.01,
+          n: 3,
+          state: "nanoparticle",
+          qc: "pass" as const,
+          used_for_model: true,
+        },
+        {
+          compound_id: "DES-A",
+          smiles: "c1ccccc1",
+          assay: "photothermal_efficiency",
+          unit: "fraction",
+          mean: 0.4,
+          sd: null,
+          n: 1,
+          qc: "warn" as const,
+          issues: ["1 replicate, fewer than 3"],
+          used_for_model: false,
+        },
+      ],
+      recalibration: { plqy: { status: "not fitted: needs 3 measured compounds", n: 1 } },
+      proxy_calibration: { plqy: { n: 1, spearman: null } },
+      next_round: ["Resume with pipeline.py --next-round"],
+    }
+    const host = mount("step6", results)
+    expect(host.textContent).toContain("4 rows accepted · 1 rejected · 1 control rows · lab dataset version 1")
+    expect(host.textContent).toContain("1 measurements pass QC · 1 with warnings · 1 train the model")
+    expect(host.textContent).toContain("1 of 2 selected compounds measured · not measured: DES-B")
+    expect(host.textContent).toContain("Row 5: unit 'kg' not accepted for plqy")
+    expect(host.textContent).toContain("0.1200 ± 0.010 fraction")
+    expect(host.textContent).toContain("QC warning · not used for model")
+    expect(host.textContent).toContain("0.4000 fraction")
+    expect(host.textContent).toContain("1 replicate, fewer than 3")
+    expect(host.textContent).toContain("plqy: not fitted: needs 3 measured compounds")
+    expect(host.textContent).toContain("plqy: rank correlation n/a over 1 compounds")
+    const refused = mount("step6", { ...results, ingested: false, dataset_version: 0, measurements: [] })
+    expect(refused.textContent).toContain("the lab dataset is unchanged")
+    expect(refused.textContent).not.toContain("lab dataset version")
+  })
+
+  test("accepts the lab-loop progress states and artifacts and rejects incomplete ones", () => {
+    const stage = (key: string, status: string) => ({
+      key,
+      title: key,
+      status,
+      seconds: 0,
+      started: null,
+      produces: "x",
+    })
+    const progress = (outcome: string, status: string) =>
+      JSON.stringify({
+        question: "q",
+        mode: "full",
+        output_dir: "out",
+        outcome,
+        round: 2,
+        updated: "1",
+        stages: [stage("goal", "ok"), stage("step5", "ok"), stage("step6", status)],
+      })
+    expect(parseProgress(progress("awaiting_results", "awaiting_results"))?.round).toBe(2)
+    expect(parseProgress(progress("awaiting_results", "waiting"))).toBeUndefined()
+    expect(parseProgress(progress("paused", "awaiting_results"))).toBeUndefined()
+    expect(parseArtifact('{"artifact":"scores","pool":{},"candidates":[]}')?.artifact).toBe("scores")
+    expect(parseArtifact('{"artifact":"scores","candidates":[]}')).toBeUndefined()
+    expect(parseArtifact('{"artifact":"plan","batch":[],"assays":[]}')?.artifact).toBe("plan")
+    expect(parseArtifact('{"artifact":"plan","batch":[]}')).toBeUndefined()
+    expect(parseArtifact('{"artifact":"results","rows":{},"measurements":[]}')?.artifact).toBe("results")
+    expect(parseArtifact('{"artifact":"results","measurements":[]}')).toBeUndefined()
+  })
+
+  test("marks a run that is waiting for the lab and names the design round", () => {
+    const run: Progress = {
+      question: "Design a molecule",
+      mode: "generate-only",
+      output_dir: "/run",
+      outcome: "awaiting_results",
+      round: 2,
+      updated: "1",
+      stages: [
+        { key: "goal", title: "Goal", status: "ok", seconds: 1, started: "1", produces: "goal_spec.json" },
+        { key: "step4", title: "Step 4", status: "ok", seconds: 1, started: "2", produces: "score_card.json" },
+        { key: "step5", title: "Step 5", status: "ok", seconds: 1, started: "3", produces: "experiment_plan.json" },
+        {
+          key: "step6",
+          title: "Step 6",
+          status: "awaiting_results",
+          seconds: 0,
+          started: null,
+          produces: "lab_results.json",
+        },
+      ],
+    }
+    const host = document.createElement("div")
+    document.body.append(host)
+    cleanups.push(web.render(() => view.MolPipelineView({ run, trace: [], artifacts: {} }) as JSX.Element, host))
+    expect(host.querySelector(".molpipe__meta")?.textContent).toContain("Awaiting lab results")
+    expect(host.querySelector(".molpipe__meta")?.textContent).toContain("Round 2")
+    expect(host.querySelector('[data-stage="step6"] .molpipe__stage-status')?.textContent).toBe("Awaiting lab")
+    expect(host.querySelector('[data-stage="step6"]')?.textContent).toContain("Waiting for lab results")
+    expect(host.querySelector(".molpipe__foot")?.textContent).toContain("Rankings are structural estimates")
   })
 })

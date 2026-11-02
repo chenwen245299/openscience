@@ -1,6 +1,6 @@
 ---
 name: molagent-workflow
-description: End-to-end design workflow for theranostic luminogens — molecules whose excited state is split between fluorescence imaging, photodynamic therapy and photothermal therapy. Chains literature retrieval, chromophore database retrieval and filtering, and generation plus targeted modification into one reproducible run with versioned artifacts. Supplies the photophysical layer the drug-discovery skills lack — conjugation and push-pull descriptors, intersystem-crossing routes, Type I versus Type II leaning, channel balance, and a band proxy calibrated against reference dyes. Use for phototheranostics, photosensitizer design, NIR-I/NIR-II fluorophores, AIE luminogens, photothermal and photoacoustic agents, and any request that names fluorescence imaging, PDT, PTT, singlet oxygen, ROS generation or an emission window.
+description: End-to-end design workflow for theranostic luminogens — molecules whose excited state is split between fluorescence imaging, photodynamic therapy and photothermal therapy. Chains literature retrieval, chromophore database retrieval and filtering, generation plus targeted modification, multi-objective scoring, active-learning batch selection and wet-lab feedback into one reproducible design loop with versioned artifacts. Supplies the photophysical layer the drug-discovery skills lack — conjugation and push-pull descriptors, intersystem-crossing routes, Type I versus Type II leaning, channel balance, and a band proxy calibrated against reference dyes. Use for phototheranostics, photosensitizer design, NIR-I/NIR-II fluorophores, AIE luminogens, photothermal and photoacoustic agents, and any request that names fluorescence imaging, PDT, PTT, singlet oxygen, ROS generation or an emission window.
 summary: Design theranostic luminogens from literature through chromophore retrieval to generation, with photophysical scoring.
 category: chemistry
 allowed-tools: Read Bash Write Edit Glob Grep Literature
@@ -95,6 +95,14 @@ or ask the user whether to read the papers. Common variations:
 | Start from your own molecules | `--seeds "SMILES1,SMILES2"` |
 | Design without retrieval | `--mode generate-only` |
 | Force a target the question did not state | `--band NIR-II --ros-type I --modalities FLI,PDT,PTT` |
+| Size the lab batch | `--batch 6 --replicates 3` |
+| Ingest the lab's results for this round | `--results-from lab_round1.csv` |
+| Score and select again on the updated dataset | `--next-round` |
+
+The run also stops after step 5, with outcome `awaiting_results`. That stop
+belongs to the user: give them the experiment plan and its results template,
+and resume only with a results file their lab produced. Never write,
+estimate or simulate measured values.
 
 ## The chain
 
@@ -104,12 +112,18 @@ question
   -> EvidencePack            step1_literature.py   papers + saved bodies + agent-reviewed structural guidance
   -> MoleculeSet retrieved   step2_database.py     evidence-guided queries, structural gates and soft preferences
   -> MoleculeSet designed    step3_design.py       assembled and edited proposals
+  -> ScoreCard               step4_scoring.py      predictions with uncertainty, checks, multi-objective score
+  -> ExperimentPlan          step5_selection.py    acquisition-ranked lab batch, assays, results template
+  -> Results                 step6_feedback.py     QC'd measurements, dataset version, surrogate refit
+                                                   (--next-round returns to step 4)
 ```
 
 Artifacts land in `--output-dir` as `goal_spec.json`, `evidence_pack.json`,
 `molecule_set_retrieved.json`, `molecule_set_designed.json`,
-`pipeline_report.json`, and an append-only `provenance.jsonl` that records
-every external call. Each stage validates the upstream artifact before
+`score_card.json`, `experiment_plan.json`, `results_template_round-N.csv`,
+`lab_results.json`, `lab_dataset.json`, `pipeline_report.json`, and an
+append-only `provenance.jsonl` that records every external call. Steps 4 to
+6 rewrite their artifacts each round and keep a copy in `rounds/round-N/`. Each stage validates the upstream artifact before
 reading it, so a half-written file stops the run instead of propagating.
 
 ### Step 0 — GoalSpec (`goalspec.py`)
@@ -287,6 +301,59 @@ parent.
 wired to a scoring config yet, so it reports what is missing and falls back
 to RDKit rather than pretending to have run.
 
+### Step 4 — Molecular scoring (`step4_scoring.py`)
+
+The pool is every retrieved and designed molecule, deduplicated by InChIKey.
+Retrieved molecules keep their database ID; designs get `DES-<InChIKey
+block>`, so a structure keeps one ID across rounds and lab results link to it.
+
+- **Predict**: structural proxies (band, channel shares, Type I leaning),
+  the optional fluorescence model with its tree spread, and a Gaussian-process
+  surrogate (`surrogate.py`, Tanimoto kernel) for each objective with at least
+  three measured compounds. Without lab data, uncertainty is structural
+  novelty against reference dyes and measured compounds.
+- **Validate**: validity, the GoalSpec gate, SAscore against `--max-sa`,
+  PAINS alerts, and an out-of-domain flag when nothing measured is similar.
+  No ADMET model is bundled; descriptors are reported as descriptors.
+- **Score**: a weighted mean of profile fit, feasibility and (once fitted)
+  the lab surrogate (`--weights`), plus the Pareto front.
+
+"Fits the full profile" means no hard check failed and the SAscore is under
+the ceiling. Candidates that do not fit stay in the ScoreCard with the reason.
+
+### Step 5 — Active learning (`step5_selection.py`)
+
+Acquisition = gain + uncertainty + diversity − cost, each weighted
+(`--acquisition`). Gain is expected improvement over the best measurement
+once a surrogate exists, otherwise the ScoreCard score. Diversity counts
+distance from earlier picks and measured compounds plus new scaffolds; cost
+comes from the SAscore. The batch is picked greedily and each pick is
+labelled exploit, explore or diversify by the term that sets it apart from
+the rest of the pool. Measured compounds are never reselected.
+
+The plan lists the assays the GoalSpec needs (`assays.py`), each with its
+control, protocol and replicate count, the checks to run before synthesis
+(TD-DFT, retrosynthesis), and writes `results_template_round-N.csv` with one
+row per compound, assay and replicate plus control rows.
+
+### Step 6 — Wet-lab feedback (`step6_feedback.py`)
+
+Runs only on a results file from the lab, passed with `--results-from`.
+
+- **QC per row**: the compound ID must be in the ScoreCard, a SMILES given
+  with it must match by InChIKey, and the assay, unit and physical range must
+  be valid. Blank template rows are counted, not rejected.
+- **QC per compound and assay**: replicates, coefficient of variation
+  (`--max-cv`) and at least one control row. Anything short is kept as
+  `warn`; only `pass` values train the surrogate unless `--accept-warnings`.
+- **Ingest**: accepted values join `lab_dataset.json` as a new version with
+  the source file's SHA-256, so the same file is never ingested twice.
+- **Recalibrate**: the surrogate is refitted with exact leave-one-out error,
+  and the step-4 structural fit is compared with the measurements by rank
+  correlation, so the proxy's usefulness is measured rather than assumed.
+
+`--next-round` then reruns steps 4 and 5 on the updated dataset.
+
 ## The photophysics layer (`photophysics.py`)
 
 `profile(smiles)` returns, for one molecule:
@@ -358,11 +425,12 @@ returned with `in_domain: false` rather than silently.
 NIR-II emitter, or for anything in an aggregate, is extrapolation — and the
 aggregate is the state these agents actually work in.
 
-## After the pipeline
+## What the experiment plan asks of the lab
 
-The run ends with proposals, not answers. What follows:
+Until step 6 ingests measurements, every score is a proposal, not an answer.
+The plan carries these checks so they travel with the batch:
 
-1. **TD-DFT** on the top candidates: S1/T1 energies, Delta E_ST, oscillator
+1. **TD-DFT** on the batch: S1/T1 energies, Delta E_ST, oscillator
    strength. Use a range-separated functional (CAM-B3LYP, wB97X-D) — B3LYP
    underestimates the charge-transfer states these molecules are built on.
 2. **Retrosynthesis** on the implied couplings before ordering anything.
@@ -373,6 +441,9 @@ The run ends with proposals, not answers. What follows:
 4. **Distinguish the ROS route experimentally**: DHR123 and HPF for Type I,
    SOSG and ABDA for Type II, with ESR spin trapping (DMPO or BMPO) to
    confirm.
+
+Record the state of use, solvent and protocol ID in the template's columns;
+step 6 keeps them with each measurement.
 
 `references/design-rules.md` holds the design rules and their sources.
 
