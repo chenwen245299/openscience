@@ -125,6 +125,9 @@ ARTIFACTS = {
     "retrieved": "molecule_set_retrieved.json",
     "designed": "molecule_set_designed.json",
     "scores": "score_card.json",
+    "plan": "experiment_plan.json",
+    "results": "lab_results.json",
+    "dataset": "lab_dataset.json",
     "report": "pipeline_report.json",
 }
 
@@ -142,6 +145,23 @@ def write_artifact(output_dir: str, kind: str, payload: dict) -> str:
     stamped = {"artifact": kind, "schema_version": 1, "written": utcnow(), **payload}
     with open(target, "w", encoding="utf-8") as handle:
         json.dump(stamped, handle, indent=2, ensure_ascii=False)
+    return target
+
+
+def archive(output_dir: str, kind: str, round_number: int) -> str:
+    """
+    Copy the current artifact into rounds/round-N/.
+
+    Steps 4 to 6 rewrite their artifacts every design round, and a lab result
+    must stay traceable to the exact plan and scores it answered, so each
+    round keeps its own copy beside the latest one.
+    """
+    import shutil
+
+    folder = os.path.join(output_dir, "rounds", f"round-{round_number}")
+    os.makedirs(folder, exist_ok=True)
+    target = os.path.join(folder, ARTIFACTS[kind])
+    shutil.copyfile(artifact_path(output_dir, kind), target)
     return target
 
 

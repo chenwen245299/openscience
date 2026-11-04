@@ -1,8 +1,14 @@
-# CLAUDE.md: OpenScience
+# CLAUDE.md
 
-Read `AGENTS.md` first: repository map, commands, conventions, and the CI/release
-rules. This file keeps the product facts and the prompt-architecture guide that
-help when the shipped agent misbehaves.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+The repository map, commands (including how to run one test), conventions, and
+CI/release rules live in `AGENTS.md`, imported here:
+
+@AGENTS.md
+
+This file keeps the product facts, the prompt-architecture guide that helps when
+the shipped agent misbehaves, and what this fork adds on top of upstream.
 
 ## Product facts
 
@@ -119,6 +125,7 @@ not only the displayed model name or an effort label.
 | `agent/prompt/science.txt`                                                                        | The shared science block filled into every `{{SCIENCE}}` slot       |
 | `agent/prompt/specialist.txt`                                                                     | The specialist worker template (`{{SCIENCE}}`, `{{DOMAIN_SKILLS}}`) |
 | `agent/prompt/explore.txt`                                                                        | The scout worker                                                    |
+| `agent/prompt/reader.txt`                                                                         | The `review` harness unit's fresh-context report reader             |
 | `agent/prompt/compaction.txt`, `title.txt`, `summary.txt`                                         | Internal summarization, UI-label and lab-notebook agents            |
 | `session/prompt/plan.txt`, `build-switch.txt`, `max-steps.txt`                                    | Plan, mode-transition and step-limit guidance                       |
 | `tool/task.txt`, `tool/recall.txt`, `tool/literature.txt`                                         | Tool contracts the model reads                                      |
@@ -128,15 +135,17 @@ not only the displayed model name or an effort label.
 `src/agent/agent.ts` defines the built-in profiles and merges configured
 overrides: `research` (primary, default), `plan` (primary, hidden), `explore`
 (subagent), the specialists `ml`, `biology`, `physics`, `chemistry`, `data`
-(subagents built from one template plus their skill categories), and the
-internal `compaction`, `title`, `summary`. No built-in agent carries a model;
+(subagents built from one template plus their skill categories), `general`, and
+the internal `compaction`, `title`, `summary`, `reader`. No built-in agent carries a model;
 `agent.<name>.model`, `.variant` and `.skills` in `openscience.json` configure
 one, and a configured `permission` rule that names a tool unlocks it for that
 agent. Recommended models live in the documentation.
 
 ## Trace a behavior problem
 
-1. Resolve the active agent, its configured prompt and permissions in
+1. Check the session's `loop` field first: a MolSession (`loop: "mol"`) runs on
+   the `src/mol` copy, not the files below (see "This fork" at the end).
+   Resolve the active agent, its configured prompt and permissions in
    `src/agent/agent.ts`; check the actual model/API/auth route.
 2. Follow header selection through `LLM.prompts`, then context and reminders in
    `src/session/prompt.ts`. Compare the current user turn with resumed history.
@@ -152,3 +161,64 @@ agent. Recommended models live in the documentation.
 
 Use local request fixtures before paid model comparisons. Keep model-specific
 prompt quality experiments separate from required transport and lifecycle fixes.
+
+## This fork: MolSessions and the luminogen workflow
+
+This checkout (`origin` = `chenwen245299/openscience`) is a fork of
+`synthetic-sciences/openscience` and merges `upstream/main` periodically. The
+fork's own work is below; everything above describes upstream behaviour.
+
+### The Mol loop is a copy, not a branch
+
+A session whose record has `loop: "mol"` (set by `POST /session`, kept on fork)
+is a MolSession. `SessionPrompt.loop` in `src/session/prompt.ts` dispatches it
+with one line to `MolLoop.execute`; every other session, including workers that
+a MolSession spawns through `task`, runs the research loop.
+
+`src/mol/{loop,processor,llm,system}.ts` began as line-for-line copies of
+`execute` in `session/prompt.ts`, `session/processor.ts`, `session/llm.ts` and
+the header selection in `session/system.ts`. `src/mol/prompt/*.txt` are copies
+of the family headers, `science.txt`, `response.txt`, `plan.txt`,
+`build-switch.txt` and `max-steps.txt`. Research code never imports from
+`src/mol`. Consequences:
+
+- Editing `agent/prompt/science.txt` (or any research prompt) does not change
+  what MolSessions send; edit `src/mol/prompt/` for that.
+- A fix to the research loop, processor or LLM assembly, whether ours or
+  merged from upstream, does not reach the copy. Diff the original against the
+  `src/mol` file and port it by hand when it applies.
+- Still shared: admission, cancellation and the loop lease
+  (`SessionPrompt.loop`), `SessionPrompt.permissionAtExecution`, tools, skills,
+  compaction, storage, and the harness units through `loop.before_finish` /
+  `loop.guard`.
+
+`src/mol/README.md` (Chinese) has the full table. After touching the Mol loop or
+its dispatch, run from `backend/cli`:
+`bun test --timeout 15000 ./test/session/mol-loop.test.ts`.
+
+### The molagent-workflow skill and its pane
+
+`backend/cli/skills/chemistry/molagent-workflow/` is a Python pipeline
+(`scripts/pipeline.py` chaining `step1_literature`, `step2_database`,
+`step3_design`) for theranostic luminogen design. It writes `progress.json`
+on every stage transition and `provenance.jsonl` into its output directory.
+The workspace finds directories containing `progress.json` and renders them
+through `frontend/workspace/src/atlas/mol-pipeline*.ts`, `MolPipelinePane.tsx`
+and `MolStageSummary.tsx`; a change to the progress or provenance shape needs
+both sides.
+
+The skill's Python is tested from Bun: `backend/cli/test/skill/molagent-*.test.ts`
+spawn fixture scripts in `test/skill/fixture/` with
+`OPENSCIENCE_TEST_RDKIT_PYTHON` (falling back to `python3`) and skip when
+neither exists. Steps 2–3 need RDKit; the skill tells the agent to provision
+the pinned science pack rather than `pip install`.
+
+### Model-judged permission asks
+
+Before a shell permission prompt reaches the user, `PermissionNext` calls
+`PermissionJudge.decide` (`src/permission/judge.ts`): a separate, context-free
+request to the model that issued the tool call, given the command and the
+source of local scripts it runs (`src/permission/shell-source.ts`, tree-sitter).
+The verdict is the literal `{"risk":"无风险"}` or `{"risk":"有风险"}`; only
+`无风险` auto-allows, and only that one invocation. Vetoes, uninspectable
+sources, timeouts or invalid replies fall back to asking.

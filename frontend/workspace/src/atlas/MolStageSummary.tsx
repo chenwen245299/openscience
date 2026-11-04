@@ -4,13 +4,18 @@ import { createStore } from "solid-js/store"
 import {
   summarizeSources,
   type Artifact,
+  type BatchEntry,
   type Finding,
+  type Measurement,
   type Molecule,
   type Paper,
   type Provenance,
+  type ScoredCandidate,
   type SearchHit,
   type SourceSummary,
+  type SurrogateFit,
 } from "./mol-pipeline"
+import { MolStructure } from "./MolStructure"
 import openalex from "./assets/sources/openalex.png"
 import arxiv from "./assets/sources/arxiv.png"
 import europepmc from "./assets/sources/europepmc.png"
@@ -521,6 +526,7 @@ function MoleculeRow(props: { molecule: Molecule }) {
           </a>
         )}
       </Show>
+      <MolStructure smiles={props.molecule.smiles} alt={`Structure of ${props.molecule.id ?? name()}`} />
       <div class="molpipe__item-meta">
         {props.molecule.gate
           ? props.molecule.gate.pass
@@ -548,6 +554,179 @@ function MoleculeRow(props: { molecule: Molecule }) {
   )
 }
 
+const ROLES: Record<BatchEntry["role"], string> = { exploit: "Exploit", explore: "Explore", diversify: "Diversify" }
+
+function label(value: string) {
+  return value.replaceAll("_", " ")
+}
+
+function number(value: number | null | undefined, digits = 3) {
+  return value === undefined || value === null ? "n/a" : value.toFixed(digits)
+}
+
+function CompoundTitle(props: { id: string; smiles: string; url?: string; name?: string; design?: string }) {
+  const title = () => label(props.name ?? props.design ?? props.id)
+  return (
+    <Show
+      when={link(props.url)}
+      fallback={
+        <span class="molpipe__item-title" title={props.smiles}>
+          {title()}
+        </span>
+      }
+    >
+      {(url) => (
+        <a class="molpipe__item-title" href={url()} target="_blank" rel="noopener noreferrer" title={props.smiles}>
+          {title()}
+        </a>
+      )}
+    </Show>
+  )
+}
+
+function SurrogateFits(props: { title: string; fits?: Record<string, SurrogateFit> }) {
+  return (
+    <Show when={Object.keys(props.fits ?? {}).length}>
+      <div class="molpipe__label">{props.title}</div>
+      <For each={Object.entries(props.fits ?? {})}>
+        {([assay, fit]) => (
+          <p class="molpipe__line" data-surrogate={assay}>
+            {label(assay)}:{" "}
+            {fit.status === "fitted"
+              ? `${fit.n} compounds · leave-one-out RMSE ${number(fit.rmse, 4)} · rank correlation ${number(fit.spearman, 2)}`
+              : fit.status}
+          </p>
+        )}
+      </For>
+    </Show>
+  )
+}
+
+function CandidateRow(props: { candidate: ScoredCandidate }) {
+  const lab = () => Object.entries(props.candidate.predictions?.lab ?? {})
+  const measured = () => Object.entries(props.candidate.measured ?? {})
+  const alerts = () =>
+    Object.entries(props.candidate.admet?.alerts ?? {})
+      .filter(([, hits]) => hits.length)
+      .map(([name]) => name)
+  return (
+    <li class="molpipe__item" data-decision={props.candidate.fits_profile ? "kept" : "excluded"}>
+      <CompoundTitle
+        id={props.candidate.id}
+        smiles={props.candidate.smiles}
+        url={props.candidate.url}
+        name={props.candidate.name}
+        design={props.candidate.architecture ?? props.candidate.edit}
+      />
+      <MolStructure smiles={props.candidate.smiles} alt={`Structure of ${props.candidate.id}`} />
+      <div class="molpipe__item-meta">
+        {props.candidate.fits_profile
+          ? "Fits the full profile"
+          : `Does not fit · ${(props.candidate.failed_checks ?? []).map(label).join(", ") || "checks failed"}`}
+        {` · score ${props.candidate.score.toFixed(3)}`}
+        {props.candidate.uncertainty ? ` · uncertainty ${props.candidate.uncertainty.value.toFixed(2)}` : ""}
+        {props.candidate.pareto_front !== undefined ? ` · Pareto front ${props.candidate.pareto_front}` : ""}
+      </div>
+      <Show when={measured().length}>
+        <p class="molpipe__finding-note">
+          Measured:{" "}
+          {measured()
+            .map(([assay, value]) => `${label(assay)} ${value.toPrecision(3)}`)
+            .join(" · ")}
+        </p>
+      </Show>
+      <Show when={lab().length}>
+        <p class="molpipe__finding-note">
+          Lab surrogate:{" "}
+          {lab()
+            .map(
+              ([assay, value]) =>
+                `${label(assay)} ${value.utility.toFixed(3)} ± ${value.std.toFixed(3)} (${value.scale})`,
+            )
+            .join(" · ")}
+        </p>
+      </Show>
+      <Show when={props.candidate.admet?.solubility}>
+        {(water) => (
+          <p class="molpipe__finding-note">
+            Solubility estimate: {water().class}
+            {water().mg_per_ml !== undefined ? ` · ${water().mg_per_ml!.toPrecision(2)} mg/mL` : ""}
+            {water().in_domain ? "" : ` · extrapolated, ${water().out_of_domain}`}
+            {alerts().length ? ` · alerts: ${alerts().join(", ")}` : ""}
+          </p>
+        )}
+      </Show>
+      <DecisionReason
+        label="Why ranked"
+        reason={props.candidate.selection_reason ?? "Ranking reason was not saved in this run."}
+        details={[`Compound ID: ${props.candidate.id}`, ...(props.candidate.selection_details ?? [])]}
+        checks={props.candidate.checks}
+      />
+    </li>
+  )
+}
+
+function BatchRow(props: { entry: BatchEntry }) {
+  return (
+    <li class="molpipe__item" data-role={props.entry.role}>
+      <CompoundTitle
+        id={props.entry.id}
+        smiles={props.entry.smiles}
+        url={props.entry.url}
+        name={props.entry.name}
+        design={props.entry.architecture ?? props.entry.edit}
+      />
+      <MolStructure smiles={props.entry.smiles} alt={`Structure of ${props.entry.id}`} />
+      <div class="molpipe__topics">
+        <span>{ROLES[props.entry.role]}</span>
+        <Show when={props.entry.new_scaffold}>
+          <span>New scaffold</span>
+        </Show>
+        <Show when={props.entry.parent}>
+          <span>Edit of {props.entry.parent}</span>
+        </Show>
+        <span>{props.entry.id}</span>
+      </div>
+      <div class="molpipe__item-meta">
+        acquisition {props.entry.acquisition.toFixed(3)} · gain {props.entry.terms.gain.toFixed(2)} · uncertainty{" "}
+        {props.entry.terms.uncertainty.toFixed(2)} · diversity {props.entry.terms.diversity.toFixed(2)} · cost{" "}
+        {props.entry.terms.cost.toFixed(2)}
+      </div>
+      <For each={props.entry.handling ?? []}>{(note) => <p class="molpipe__review">{note}</p>}</For>
+      <DecisionReason
+        label="Why selected"
+        reason={props.entry.selection_reason ?? "Selection reason was not saved in this run."}
+        details={props.entry.selection_details ?? []}
+      />
+    </li>
+  )
+}
+
+function MeasurementRow(props: { measurement: Measurement }) {
+  const sd = () =>
+    props.measurement.sd !== undefined && props.measurement.sd !== null ? props.measurement.sd : undefined
+  return (
+    <li class="molpipe__finding" data-qc={props.measurement.qc}>
+      <div class="molpipe__finding-head">
+        <span class="molpipe__finding-label">
+          {props.measurement.compound_id} · {label(props.measurement.assay)}
+          {props.measurement.state ? ` · ${props.measurement.state}` : ""}
+        </span>
+        <span class="molpipe__finding-badge" data-verified={props.measurement.qc === "pass"}>
+          {props.measurement.qc === "pass" ? "QC passed" : "QC warning"}
+          {props.measurement.used_for_model ? " · trains model" : " · not used for model"}
+        </span>
+      </div>
+      <div class="molpipe__finding-value">
+        {props.measurement.mean.toPrecision(4)}
+        {sd() !== undefined ? ` ± ${sd()!.toPrecision(2)}` : ""} {props.measurement.unit}
+        <span class="molpipe__finding-note"> (n = {props.measurement.n})</span>
+      </div>
+      <For each={props.measurement.issues}>{(issue) => <p class="molpipe__review">{issue}</p>}</For>
+    </li>
+  )
+}
+
 function link(value?: string | null) {
   return value && /^https?:\/\//i.test(value) ? value : undefined
 }
@@ -571,6 +750,9 @@ export function MolStageSummary(props: {
   )
   const generated = () => props.trace.findLast((entry) => entry.action === "generate")
   const names = createMemo(() => sources().map((source) => source.name))
+  const scores = createMemo(() => (props.artifact?.artifact === "scores" ? props.artifact : undefined))
+  const plan = createMemo(() => (props.artifact?.artifact === "plan" ? props.artifact : undefined))
+  const results = createMemo(() => (props.artifact?.artifact === "results" ? props.artifact : undefined))
 
   return (
     <div class="molpipe__summary">
@@ -703,7 +885,19 @@ export function MolStageSummary(props: {
               {set().generated ?? set().retrieved ?? 0} {set().artifact === "designed" ? "generated" : "retrieved"}
               {set().passed_gate !== undefined ? ` · ${set().passed_gate} pass checks` : ""}
               {` · ${set().molecules.length} shortlisted`}
+              {set().carried_forward ? ` · ${set().carried_forward} carried forward` : ""}
             </p>
+            <Show when={set().parents?.measured}>
+              {(count) => (
+                <p class="molpipe__note">
+                  Round {set().round} edits {count()} compound{count() === 1 ? "" : "s"} the lab has measured:{" "}
+                  {(set().parents?.edited ?? [])
+                    .filter((parent) => parent.measured)
+                    .map((parent) => parent.id)
+                    .join(", ")}
+                </p>
+              )}
+            </Show>
             <Show when={Object.values(set().rejected_counts ?? {}).some((count) => count > 0)}>
               <p class="molpipe__line">
                 Removed:{" "}
@@ -756,6 +950,208 @@ export function MolStageSummary(props: {
                   }
                 >
                   <p>{set().molecules.length} shortlisted molecules for parent selection and modification.</p>
+                </Show>
+              </div>
+            </details>
+          </>
+        )}
+      </Show>
+
+      <Show when={scores()}>
+        {(card) => (
+          <>
+            <div class="molpipe__tool-row">
+              <Brand name="rdkit" />
+              <span>Predict · validate · multi-objective score</span>
+            </div>
+            <p class="molpipe__line">
+              {card().pool.unique} candidates scored ({card().pool.retrieved} retrieved, {card().pool.designed}{" "}
+              designed) · <span data-decision="kept">{card().fits_profile} fit the full profile</span>
+            </p>
+            <p class="molpipe__finding-note">
+              {card().uncertainty_basis === "lab surrogate"
+                ? `Round ${card().round}: predictions and uncertainty from a surrogate trained on ${card().measured_compounds ?? 0} measured compounds.`
+                : `Round ${card().round}: no lab measurements yet; uncertainty is structural novelty against measured and reference compounds.`}
+            </p>
+            <SurrogateFits
+              title="Lab surrogate"
+              fits={Object.fromEntries(
+                Object.entries(card().models?.surrogate ?? {}).filter(([, fit]) => fit.status === "fitted"),
+              )}
+            />
+            <Show when={card().models?.admet}>
+              <p class="molpipe__finding-note">ADMET: {card().models?.admet}</p>
+            </Show>
+            <details class="molpipe__handoff" data-output="scores">
+              <summary>
+                <span class="molpipe__output-title">
+                  Output for batch selection
+                  <span class="molpipe__disclosure-chevron" aria-hidden="true">
+                    ›
+                  </span>
+                </span>
+                <p>{card().candidates.length} ranked candidates</p>
+              </summary>
+              <div class="molpipe__output-body">
+                <Results title="Ranked candidates" items={card().candidates}>
+                  {(candidate) => <CandidateRow candidate={candidate} />}
+                </Results>
+              </div>
+            </details>
+          </>
+        )}
+      </Show>
+
+      <Show when={plan()}>
+        {(next) => (
+          <>
+            <p class="molpipe__line">
+              {next().batch.length} compounds selected
+              {next().unmeasured !== undefined ? ` from ${next().unmeasured} unmeasured candidates` : ""} · round{" "}
+              {next().round}
+            </p>
+            <div class="molpipe__topics" data-roles>
+              <For each={Object.keys(ROLES) as BatchEntry["role"][]}>
+                {(role) => (
+                  <Show when={next().batch.some((entry) => entry.role === role)}>
+                    <span>
+                      {ROLES[role]} {next().batch.filter((entry) => entry.role === role).length}
+                    </span>
+                  </Show>
+                )}
+              </For>
+            </div>
+            <Show when={next().gain_basis}>
+              <p class="molpipe__finding-note">Gain: {next().gain_basis}</p>
+            </Show>
+            <Show when={next().fallback}>
+              <p class="molpipe__note">
+                No unmeasured candidate fits the full profile; this batch is a fallback for review.
+              </p>
+            </Show>
+            <details class="molpipe__handoff" data-output="plan">
+              <summary>
+                <span class="molpipe__output-title">
+                  Experiment plan
+                  <span class="molpipe__disclosure-chevron" aria-hidden="true">
+                    ›
+                  </span>
+                </span>
+                <p>
+                  {next().batch.length} compounds · {next().assays.length} assays
+                </p>
+              </summary>
+              <div class="molpipe__output-body">
+                <Results title="Selected batch" items={next().batch}>
+                  {(entry) => <BatchRow entry={entry} />}
+                </Results>
+                <div class="molpipe__label">Assays</div>
+                <ul class="molpipe__next">
+                  <For each={next().assays}>
+                    {(assay) => (
+                      <li>
+                        <strong>
+                          {assay.label} ({assay.unit}
+                          {assay.replicates ? `, ${assay.replicates} replicates` : ""}):{" "}
+                        </strong>
+                        {assay.protocol} Control: {assay.control}.
+                      </li>
+                    )}
+                  </For>
+                </ul>
+                <Show when={next().pre_synthesis?.length}>
+                  <div class="molpipe__label">Before synthesis</div>
+                  <ul class="molpipe__next">
+                    <For each={next().pre_synthesis}>{(item) => <li>{item}</li>}</For>
+                  </ul>
+                </Show>
+                <Show when={next().measure_in}>
+                  <p class="molpipe__finding-note">Measure in {next().measure_in}.</p>
+                </Show>
+                <Show when={next().results_template}>
+                  <p class="molpipe__line">Results template: {next().results_template}</p>
+                </Show>
+              </div>
+            </details>
+          </>
+        )}
+      </Show>
+
+      <Show when={results()}>
+        {(lab) => (
+          <>
+            <p class="molpipe__line">
+              <span data-decision="kept">{lab().rows.accepted} rows accepted</span> ·{" "}
+              <span data-decision="excluded">{lab().rows.rejected} rejected</span> · {lab().rows.controls} control rows
+              {lab().ingested ? ` · lab dataset version ${lab().dataset_version}` : ""}
+            </p>
+            <Show when={!lab().ingested}>
+              <p class="molpipe__note">No row passed the checks; the lab dataset is unchanged.</p>
+            </Show>
+            <Show when={lab().qc}>
+              {(qc) => (
+                <p class="molpipe__line">
+                  {qc().pass} measurements pass QC · {qc().warn} with warnings · {qc().used_for_model} train the model
+                </p>
+              )}
+            </Show>
+            <Show when={lab().batch_coverage}>
+              {(coverage) => (
+                <p class="molpipe__line">
+                  {coverage().measured} of {coverage().planned} selected compounds measured
+                  {coverage().missing.length ? ` · not measured: ${coverage().missing.join(", ")}` : ""}
+                </p>
+              )}
+            </Show>
+            <Show when={lab().rejected?.length}>
+              <details class="molpipe__decisions" data-decision="excluded">
+                <summary>
+                  Rejected rows · {lab().rejected?.length}
+                  <span class="molpipe__disclosure-chevron" aria-hidden="true">
+                    ›
+                  </span>
+                </summary>
+                <ul class="molpipe__reason-list">
+                  <For each={lab().rejected}>
+                    {(row) => (
+                      <li data-check="unmet">
+                        Row {row.row}: {row.reason}
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </details>
+            </Show>
+            <details class="molpipe__handoff" data-output="results">
+              <summary>
+                <span class="molpipe__output-title">
+                  Measured outcomes and model update
+                  <span class="molpipe__disclosure-chevron" aria-hidden="true">
+                    ›
+                  </span>
+                </span>
+                <p>{lab().measurements.length} measurements</p>
+              </summary>
+              <div class="molpipe__output-body">
+                <ul class="molpipe__findings">
+                  <For each={lab().measurements}>{(measurement) => <MeasurementRow measurement={measurement} />}</For>
+                </ul>
+                <SurrogateFits title="Model recalibration" fits={lab().recalibration} />
+                <Show when={Object.keys(lab().proxy_calibration ?? {}).length}>
+                  <div class="molpipe__label">Structural score against measurement</div>
+                  <For each={Object.entries(lab().proxy_calibration ?? {})}>
+                    {([assay, fit]) => (
+                      <p class="molpipe__line">
+                        {label(assay)}: rank correlation {number(fit.spearman, 2)} over {fit.n} compounds
+                      </p>
+                    )}
+                  </For>
+                </Show>
+                <Show when={lab().next_round?.length}>
+                  <div class="molpipe__label">Next design round</div>
+                  <ul class="molpipe__next">
+                    <For each={lab().next_round}>{(item) => <li>{item}</li>}</For>
+                  </ul>
                 </Show>
               </div>
             </details>

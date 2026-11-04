@@ -30,11 +30,12 @@ import json
 import os
 import sys
 
+import assays
 import photophysics
 import literature_preferences
 import predictor
 import scaffolds
-from _common import log_provenance, read_artifact, require_rdkit, validate_output_dir, write_artifact
+from _common import archive, log_provenance, read_artifact, require_rdkit, validate_output_dir, write_artifact
 
 Chem = require_rdkit()
 from rdkit.Chem import AllChem, Descriptors, rdMolDescriptors  # noqa: E402
@@ -337,6 +338,11 @@ def generate_edits(parents: list[dict], goal: dict, limit: int) -> list[dict]:
                         "channel": EDITS[move]["channel"],
                         "rationale": EDITS[move]["note"],
                         "implied_chemistry": move,
+                        # An edit to a compound the lab has measured carries the
+                        # parent's values, so the one comparison step 6 can
+                        # settle -- product against parent, same assay -- is in
+                        # the artifact rather than reconstructed later.
+                        **({"parent_measured": parent["measured"]} if parent.get("measured") else {}),
                     }
                 )
                 if len(designed) >= limit:
@@ -435,6 +441,9 @@ def select(candidates: list[dict], keep: int, max_sa: float) -> list[dict]:
     for rank, candidate in enumerate(selected, 1):
         sa = candidate["synthesizability"]
         details = [f"Score rank #{rank} of {len(pool)} in the eligible pool; shortlist limit {keep}"]
+        if candidate.get("parent_measured"):
+            values = ", ".join(f"{assay} {value:g}" for assay, value in candidate["parent_measured"].items())
+            details.append(f"Edit of a measured parent ({candidate['parent']}): {values}; the lab can compare this product against it directly")
         for match in candidate.get("literature_matches", []):
             details.append(f"Literature {match['finding_id']} ({match['source']}): {match['statement']}; {match['direction']} {', '.join(match['matched']) or 'no matching feature'}; {match['effect']}; unmatched: {', '.join(match['missing']) or 'none'}; scope: {match['conditions']}")
         if sa.get("available"):
@@ -453,11 +462,66 @@ def select(candidates: list[dict], keep: int, max_sa: float) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Parents
+# ---------------------------------------------------------------------------
+
+
+def lab_parents(dataset: dict, goal: dict, limit: int) -> list[dict]:
+    """
+    The measured compounds worth editing, best first.
+
+    From the second round on the lab has said which structures actually work,
+    and those are better starting points than the database's ranking: an edit
+    to a compound with a measured quantum yield inherits a parent value to be
+    judged against, which is the one comparison the next round can settle.
+    This is what makes the loop a loop -- without it, every round picks from a
+    pool proposed before any measurement existed.
+
+    Objectives sit on different scales (a fraction, a log fold change, a
+    window fit), so a compound's standing is the mean of its z-scores within
+    the measured set, not a sum of raw utilities. A single measured compound
+    has no spread to stand out from and is simply returned.
+    """
+    records = assays.measured(dataset)
+    standing: dict[str, list[float]] = {key: [] for key in records}
+    for assay in assays.objectives(goal):
+        scored: dict[str, float] = {}
+        for key, record in records.items():
+            means = record["values"].get(assay)
+            value = assays.utility(assay, sum(means) / len(means), goal) if means else None
+            if value is not None:
+                scored[key] = value
+        if len(scored) < 2:
+            continue
+        mean = sum(scored.values()) / len(scored)
+        spread = (sum((value - mean) ** 2 for value in scored.values()) / len(scored)) ** 0.5
+        if spread == 0:
+            continue
+        for key, value in scored.items():
+            standing[key].append((value - mean) / spread)
+
+    rank = {key: sum(values) / len(values) if values else 0.0 for key, values in standing.items()}
+    out: list[dict] = []
+    for key in sorted(records, key=lambda k: (-rank[k], records[k]["compound_id"]))[:limit]:
+        record = records[key]
+        out.append({
+            "id": record["compound_id"],
+            "smiles": record["smiles"],
+            "inchikey": key,
+            "origin": "measured",
+            "measured": {assay: round(sum(means) / len(means), 4) for assay, means in record["values"].items()},
+            "standing": round(rank[key], 4),
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 
-def run(goal: dict, parents: list[dict], engine: str, limit: int, keep: int, max_sa: float, output_dir: str, evidence: dict | None = None) -> dict:
+def run(goal: dict, parents: list[dict], engine: str, limit: int, keep: int, max_sa: float, output_dir: str,
+        evidence: dict | None = None, round_number: int = 1, carried: list[dict] | None = None) -> dict:
     engine_used = engine
     notes: list[str] = []
 
@@ -475,29 +539,54 @@ def run(goal: dict, parents: list[dict], engine: str, limit: int, keep: int, max
     assembled = generate_scaffold_guided(goal, limit)
     print(f"Scaffold-guided: {len(assembled)} architectures assembled")
 
+    measured_parents = [p for p in parents if p.get("origin") == "measured"]
     edited = generate_edits(parents, goal, limit) if parents else []
     print(f"Targeted edits:  {len(edited)} products from {len(parents)} parents "
-          f"({', '.join(moves_for(goal))})")
+          f"({len(measured_parents)} measured) ({', '.join(moves_for(goal))})")
 
+    carried = carried or []
+    for molecule in carried:
+        molecule.setdefault("round", 1)
+    known = {molecule["smiles"] for molecule in carried}
     parents_by_smiles = {p["smiles"]: p for p in parents}
-    candidates = evaluate(assembled + edited, goal, parents_by_smiles, evidence)
-    print(f"Evaluated:       {len(candidates)} unique, valid structures")
+    candidates = [c for c in evaluate(assembled + edited, goal, parents_by_smiles, evidence) if c["smiles"] not in known]
+    print(f"Evaluated:       {len(candidates)} unique, valid structures new to this round")
 
     chosen = select(candidates, keep, max_sa)
+    for molecule in chosen:
+        molecule["round"] = round_number
     passing = sum(1 for c in candidates if c["gate"]["pass"])
-    print(f"Selected:        {len(chosen)} (gate passed by {passing}/{len(candidates)})")
+    print(f"Selected:        {len(chosen)} (gate passed by {passing}/{len(candidates)})"
+          + (f" + {len(carried)} carried forward from earlier rounds" if carried else ""))
 
-    log_provenance(output_dir, "step3", "generate", {"engine": engine_used, "candidates": len(candidates), "kept": len(chosen)})
+    # Earlier rounds' designs stay in the pool: step 4 scores from this
+    # artifact, so dropping them would retire candidates that were never
+    # measured just because a newer round proposed others.
+    molecules = sorted(carried + chosen, key=lambda molecule: molecule["score"], reverse=True)
+
+    log_provenance(output_dir, "step3", "generate", {"engine": engine_used, "candidates": len(candidates), "kept": len(chosen), "round": round_number})
 
     return {
         "goal_question": goal["question"],
         "engine": engine_used,
         "engine_notes": notes,
+        "round": round_number,
         "moves": moves_for(goal),
+        "parents": {
+            "count": len(parents),
+            "measured": len(measured_parents),
+            "source": (
+                f"{len(measured_parents)} measured compound(s) first, by standing in the lab dataset"
+                + (f", then {len(parents) - len(measured_parents)} from the retrieved MoleculeSet" if len(parents) > len(measured_parents) else "")
+                if measured_parents else "the retrieved MoleculeSet; nothing measured yet"
+            ),
+            "edited": [{"id": p.get("id"), "smiles": p["smiles"], **({"measured": p["measured"]} if p.get("measured") else {})} for p in parents],
+        },
         "literature_input": literature_preferences.inputs(evidence, []),
         "generated": len(candidates),
         "passed_gate": passing,
-        "molecules": chosen,
+        "carried_forward": len(carried),
+        "molecules": molecules,
         "next_round": [
             "Verify the top candidates with TD-DFT: S1/T1 energies, Delta E_ST, oscillator strength",
             "Check the implied couplings against a retrosynthesis tool before ordering",
@@ -517,9 +606,11 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=400, help="Cap on candidates per route")
     parser.add_argument("--keep", type=int, default=25, help="Designs kept in the MoleculeSet")
     parser.add_argument("--max-sa", type=float, default=6.0, help="Reject designs above this SAscore")
-    parser.add_argument("--parents", type=int, default=8, help="How many retrieved molecules to edit")
+    parser.add_argument("--parents", type=int, default=8, help="How many molecules to edit")
     parser.add_argument("--no-parents", action="store_true", help="Generate only; skip targeted edits")
     parser.add_argument("--no-literature", action="store_true", help="Explicitly generate without literature preferences")
+    parser.add_argument("--round", type=int, default=1, dest="round_number", help="Design round; tags each molecule and prefers measured parents")
+    parser.add_argument("--carry-forward", action="store_true", help="Keep earlier rounds' designs in the MoleculeSet")
     args = parser.parse_args()
 
     output_dir = validate_output_dir(args.output_dir)
@@ -527,22 +618,37 @@ def main() -> int:
 
     parents: list[dict] = []
     if not args.no_parents:
+        # Measured compounds lead; the retrieved ranking fills the rest.
+        parents = lab_parents(assays.load_dataset(output_dir), goal, args.parents)
+        if parents:
+            print(f"  editing {len(parents)} measured compound(s) first: {', '.join(p['id'] for p in parents)}")
+        known = {parent["smiles"] for parent in parents}
         try:
-            retrieved = read_artifact(output_dir, "retrieved")
-            parents = retrieved.get("molecules", [])[: args.parents]
+            retrieved = read_artifact(output_dir, "retrieved").get("molecules", [])
+            parents += [m for m in retrieved if m["smiles"] not in known][: max(0, args.parents - len(parents))]
         except FileNotFoundError:
-            print("  no MoleculeSet from step 2; generating without targeted edits", file=sys.stderr)
+            if not parents:
+                print("  no MoleculeSet from step 2; generating without targeted edits", file=sys.stderr)
+
+    carried: list[dict] = []
+    if args.carry_forward:
+        try:
+            carried = read_artifact(output_dir, "designed").get("molecules", [])
+        except FileNotFoundError:
+            pass
 
     evidence = None if args.no_literature else literature_preferences.load(output_dir, goal, required=False)
-    result = run(goal, parents, args.engine, args.limit, args.keep, args.max_sa, output_dir, evidence)
+    result = run(goal, parents, args.engine, args.limit, args.keep, args.max_sa, output_dir, evidence,
+                 args.round_number, carried)
     target = write_artifact(output_dir, "designed", result)
+    archive(output_dir, "designed", result["round"])
 
     print(f"\nMoleculeSet (designed) written to {target}")
     for molecule in result["molecules"][:10]:
         band = molecule["photophysics"]["spectral_band"]["band"]
         sa = molecule["synthesizability"].get("sa_score", "n/a")
         label = molecule.get("edit") or molecule.get("architecture", "")
-        print(f"  {molecule['score']:.3f}  SA={sa:<5} {band:8s} {label:18s} {molecule['smiles'][:58]}")
+        print(f"  r{molecule.get('round', 1)} {molecule['score']:.3f}  SA={sa:<5} {band:8s} {label:18s} {molecule['smiles'][:58]}")
     return 0
 
 
