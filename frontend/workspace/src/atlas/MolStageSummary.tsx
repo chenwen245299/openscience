@@ -15,6 +15,7 @@ import {
   type SourceSummary,
   type SurrogateFit,
 } from "./mol-pipeline"
+import { MolStructure } from "./MolStructure"
 import openalex from "./assets/sources/openalex.png"
 import arxiv from "./assets/sources/arxiv.png"
 import europepmc from "./assets/sources/europepmc.png"
@@ -525,6 +526,7 @@ function MoleculeRow(props: { molecule: Molecule }) {
           </a>
         )}
       </Show>
+      <MolStructure smiles={props.molecule.smiles} alt={`Structure of ${props.molecule.id ?? name()}`} />
       <div class="molpipe__item-meta">
         {props.molecule.gate
           ? props.molecule.gate.pass
@@ -616,6 +618,7 @@ function CandidateRow(props: { candidate: ScoredCandidate }) {
         name={props.candidate.name}
         design={props.candidate.architecture ?? props.candidate.edit}
       />
+      <MolStructure smiles={props.candidate.smiles} alt={`Structure of ${props.candidate.id}`} />
       <div class="molpipe__item-meta">
         {props.candidate.fits_profile
           ? "Fits the full profile"
@@ -673,6 +676,7 @@ function BatchRow(props: { entry: BatchEntry }) {
         name={props.entry.name}
         design={props.entry.architecture ?? props.entry.edit}
       />
+      <MolStructure smiles={props.entry.smiles} alt={`Structure of ${props.entry.id}`} />
       <div class="molpipe__topics">
         <span>{ROLES[props.entry.role]}</span>
         <Show when={props.entry.new_scaffold}>

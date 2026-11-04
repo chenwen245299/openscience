@@ -124,10 +124,20 @@ question
 Artifacts land in `--output-dir` as `goal_spec.json`, `evidence_pack.json`,
 `molecule_set_retrieved.json`, `molecule_set_designed.json`,
 `score_card.json`, `experiment_plan.json`, `results_template_round-N.csv`,
-`lab_results.json`, `lab_dataset.json`, `pipeline_report.json`, and an
+`lab_results.json`, `lab_dataset.json`, `pipeline_report.json`,
+`pipeline_report.html`, and an
 append-only `provenance.jsonl` that records every external call. Steps 4 to
 6 rewrite their artifacts each round and keep a copy in `rounds/round-N/`. Each stage validates the upstream artifact before
 reading it, so a half-written file stops the run instead of propagating.
+
+`pipeline_report.json` is the run's answer rather than a stage's: the goal,
+what the literature contributed, the funnel from retrieval to selection, and
+every selected compound with its structure, predicted band and channel
+split, and the reason it was picked. It is written on **every** terminal
+outcome, `awaiting_review` and `awaiting_results` included, so a first round
+that stops for the lab still has one. `pipeline_report.html` is the same
+payload as a standalone page with the structures drawn — hand that to
+someone who will not open JSON.
 
 ### Step 0 — GoalSpec (`goalspec.py`)
 
@@ -482,6 +492,38 @@ The plan carries these checks so they travel with the batch:
 
 Record the state of use, solvent and protocol ID in the template's columns;
 step 6 keeps them with each measurement.
+
+## How to report a finished run
+
+A run ends with molecules, so the answer is the molecules — not the list of
+files that hold them. Read `pipeline_report.json` and write the answer from
+it; it exists so that this summary, the workspace pane and the console all
+say the same thing.
+
+Report, in this order:
+
+1. **The target**, in one line: modalities, band, ROS route, and anything
+   the GoalSpec left under `unresolved`.
+2. **What the literature changed**, in one or two lines: how many bodies
+   were read and which takeaways actually steered retrieval or the edits.
+   Name a takeaway that moved a decision, not the paper count.
+3. **Every selected compound**: its architecture or the edit and parent it
+   came from, its predicted band and dominant channel, and the one sentence
+   of rationale the pipeline recorded. Give the SMILES for each. A
+   compound the reader cannot identify has not been reported.
+4. **What the batch is uncertain about**: compounds flagged for solubility
+   or handling, failed soft checks, and where the profile was a compromise.
+5. **The next action** from the report's `next_action`, with the exact file
+   the lab fills in.
+
+Then link `pipeline_report.html` as the version to share.
+
+Never present a predicted value as measured. The predictions are 2D
+structural proxies for ranking; say so once, plainly, rather than hedging
+every number. Only `lab_dataset.json` holds measurements.
+
+A file inventory is not a report. Listing artifact names without the
+compounds above leaves the reader knowing nothing about the science.
 
 `references/design-rules.md` holds the design rules and their sources.
 

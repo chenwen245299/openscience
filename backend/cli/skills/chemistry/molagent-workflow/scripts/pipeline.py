@@ -47,6 +47,7 @@ import subprocess
 import sys
 import time
 
+import report as run_report
 from _common import ARTIFACTS, artifact_path, have_rdkit, read_artifact, utcnow, validate_output_dir
 import literature_evidence
 
@@ -227,17 +228,16 @@ def build(args, output_dir: str, round_number: int = 1) -> list[Stage]:
     return [all_stages[k] for k in MODES[args.mode] if k not in skip]
 
 
-def summarise(output_dir: str, stages: list[Stage]) -> dict:
-    report = {
-        "completed": utcnow(),
-        "stages": [{"stage": s.key, "title": s.title, "status": s.status, "seconds": round(s.elapsed, 1)} for s in stages],
-        "artifacts": {},
-    }
-    for kind, filename in ARTIFACTS.items():
-        path = os.path.join(output_dir, filename)
-        if os.path.isfile(path):
-            report["artifacts"][kind] = filename
-    return report
+def summarise(output_dir: str, question: str, mode: str, stages: list[Stage], outcome: str,
+              round_number: int = 1, total_seconds: float | None = None) -> dict:
+    """Write the RunReport for a terminal outcome, in both JSON and page form.
+
+    Every path that ends a run goes through here, including the two the
+    pipeline is designed to stop at (`awaiting_review`, `awaiting_results`).
+    A first round normally ends at `awaiting_results`, so a report written
+    only on `ok` was absent from the most common successful run.
+    """
+    return run_report.publish(output_dir, question, mode, stages, outcome, round_number, total_seconds)
 
 
 def final_summary(output_dir: str) -> None:
@@ -432,11 +432,14 @@ def main() -> int:
                     if earlier.key == "step1":
                         earlier.status = "awaiting_review"
                 report("awaiting_review")
+                summarise(output_dir, args.question, args.mode, stages, "awaiting_review", round_number)
                 print("\nAGENT NEXT STEP: read the priority paper bodies in literature/*.json, including the methods/results and limitations. Write a review JSON with body quotes, structural motifs/functional groups, conditions and how each finding should guide retrieval/filtering. Then resume this same pipeline with --review-from review.json. This is automatic agent research work, NOT a request for the user's approval.")
                 return 0
         if stage.key == "step6" and not args.results_from:
             stage.status = "awaiting_results"
             report("awaiting_results")
+            summarise(output_dir, args.question, args.mode, stages, "awaiting_results", round_number,
+                      time.time() - started)
             plan = read_artifact(output_dir, "plan")
             print(f"\nWAITING FOR THE LAB: round {plan['round']} selected {len(plan['batch'])} compounds in {ARTIFACTS['plan']}.")
             print(f"Synthesise and assay them, fill in {plan['results_template']}, then resume this same run with")
@@ -444,23 +447,17 @@ def main() -> int:
             final_summary(output_dir)
             return 0
         if not stage.run(output_dir, report):
-            summary = summarise(output_dir, stages)
-            summary["outcome"] = "failed"
-            with open(os.path.join(output_dir, ARTIFACTS["report"]), "w", encoding="utf-8") as handle:
-                json.dump(summary, handle, indent=2, ensure_ascii=False)
+            summarise(output_dir, args.question, args.mode, stages, "failed", round_number, time.time() - started)
             report("failed")
             print(f"\nPipeline stopped at {stage.title}. Partial artifacts are in {output_dir}.")
             return 1
         if stage.status == "awaiting_review":
             report("awaiting_review")
+            summarise(output_dir, args.question, args.mode, stages, "awaiting_review", round_number)
             print("\nAGENT NEXT STEP: body evidence is saved. Read the closest useful bodies and synthesize structural guidance using the skill's review contract, then continue this same run with --review-from. Do not ask the user to approve literature reading or stop at this intermediate result.")
             return 0
 
-    summary = summarise(output_dir, stages)
-    summary["outcome"] = "ok"
-    summary["total_seconds"] = round(time.time() - started, 1)
-    with open(os.path.join(output_dir, ARTIFACTS["report"]), "w", encoding="utf-8") as handle:
-        json.dump(summary, handle, indent=2, ensure_ascii=False)
+    summary = summarise(output_dir, args.question, args.mode, stages, "ok", round_number, time.time() - started)
     report("ok")
 
     final_summary(output_dir)
